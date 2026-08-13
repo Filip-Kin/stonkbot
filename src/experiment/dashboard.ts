@@ -224,20 +224,34 @@ function renderRace(board: ArmLeaderboardRow[], schd: number | null): string {
 function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): string {
   const TOP = 8;
   const top = board.slice(0, TOP);
-  const series = top.map((r) => ({
-    id: r.armId,
+  const rawArms = top.map((r) => ({
     name: r.name || `Arm ${r.armId}`,
     color: blockOf(r.armId).color,
-    pts: rebase(loadArmEquitySeries(r.armId).map((p) => ({ t: p.t, v: p.equity }))),
-  })).filter((s) => s.pts.length >= 2);
+    raw: loadArmEquitySeries(r.armId).map((p) => ({ t: p.t, v: p.equity })),
+  })).filter((s) => s.raw.length >= 2);
 
-  const bench = rebase(loadBenchmarkHistory().filter((p) => inRegularHours(p.t)).map((p) => ({ t: p.t, v: p.price })));
-  if (series.length === 0) {
+  if (rawArms.length === 0) {
     return `<h2>📈 Equity Race <span class="sub">top ${TOP} vs SCHD</span></h2>
       <p class="muted">Curves populate as equity samples accrue…</p>`;
   }
 
-  const W = 1120, H = 300, padL = 8, padR = 8, padT = 14, padB = 18;
+  // Anchor EVERY line to one shared t0 = the experiment start, so all curves
+  // begin at 0% at the same x. The arms began ~2 days after SCHD's backfilled
+  // history, so the old per-series rebase put SCHD's 0% two days left of the
+  // arms' 0% — the lines started at different points and couldn't be compared.
+  // (This matches the t0 the hero/standings already use for the SCHD number.)
+  const t0 = Math.min(...rawArms.flatMap((s) => s.raw.map((p) => new Date(p.t).getTime())));
+
+  const series = rawArms
+    .map((s) => ({ name: s.name, color: s.color, pts: rebaseFrom(s.raw, t0) }))
+    .filter((s) => s.pts.length >= 2);
+  const bench = rebaseFrom(
+    loadBenchmarkHistory().filter((p) => inRegularHours(p.t)).map((p) => ({ t: p.t, v: p.price })),
+    t0,
+  );
+
+  const W = 1120, H = 300, padL = 60, padR = 14, padT = 16, padB = 30;
+  const plotW = W - padL - padR;
   const allPts = [...series.flatMap((s) => s.pts), ...bench];
   const rMin = Math.min(0, ...allPts.map((p) => p.r));
   const rMax = Math.max(0, ...allPts.map((p) => p.r));
@@ -254,25 +268,44 @@ function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): strin
     cxOf.set(times[i]!, cx);
   }
   const cxTotal = cx || 1;
-  const x = (t: number) => padL + ((cxOf.get(t) ?? 0) / cxTotal) * (W - padL - padR);
+  const x = (t: number) => padL + ((cxOf.get(t) ?? 0) / cxTotal) * plotW;
   const y = (r: number) => padT + (1 - (r - rMin) / rRange) * (H - padT - padB);
   const pathOf = (pts: { t: number; r: number }[]) =>
     pts.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)} ${y(p.r).toFixed(1)}`).join(" ");
 
-  const zeroY = y(0).toFixed(1);
+  // Y grid: nice % ticks, with a solid, labeled 0% baseline.
+  const yGrid = niceTicks(rMin, rMax, 5).map((v) => {
+    const yy = y(v).toFixed(1);
+    const zero = Math.abs(v) < 1e-9;
+    return `<line x1="${padL}" y1="${yy}" x2="${W - padR}" y2="${yy}" stroke="var(--border)" stroke-width="1"${zero ? "" : ` stroke-dasharray="2 5" opacity=".45"`}/>
+      <text x="${padL - 8}" y="${yy}" text-anchor="end" dominant-baseline="middle" class="axlbl">${zero ? "0" : v.toFixed(Math.abs(v) < 1 ? 2 : 1)}%</text>`;
+  }).join("");
+
+  // X ticks: one per ET calendar day, placed on the compressed axis.
+  const dayFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
+  let lastDay = "";
+  const xGrid = times.map((t) => {
+    const d = dayFmt.format(new Date(t));
+    if (d === lastDay) return "";
+    lastDay = d;
+    const xx = x(t).toFixed(1);
+    return `<line x1="${xx}" y1="${padT}" x2="${xx}" y2="${H - padB}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 5" opacity=".35"/>
+      <text x="${xx}" y="${H - padB + 15}" text-anchor="middle" class="axlbl">${d}</text>`;
+  }).join("");
+
   const benchPath = bench.length >= 2
-    ? `<path d="${pathOf(bench)}" fill="none" stroke="#f0b90b" stroke-width="2" stroke-dasharray="5 4" opacity=".8"/>` : "";
+    ? `<path d="${pathOf(bench)}" fill="none" stroke="#f0b90b" stroke-width="2" stroke-dasharray="5 4" opacity=".85"/>` : "";
   const armPaths = series.map((s) =>
     `<path d="${pathOf(s.pts)}" fill="none" stroke="${s.color}" stroke-width="2" opacity=".9"/>`).join("");
 
   const legend = [
     ...series.map((s) => `<span class="k"><span class="swatch" style="background:${s.color}"></span>${esc(s.name)} <b class="${cls(s.pts[s.pts.length - 1]!.r)}">${signed(s.pts[s.pts.length - 1]!.r)}%</b></span>`),
-    `<span class="k"><span class="swatch" style="background:#f0b90b"></span>SCHD <b>${schdLive === null ? (bench.length ? signed(bench[bench.length - 1]!.r) + "%" : "—") : signed(schdLive) + "%"}</b></span>`,
+    `<span class="k"><span class="swatch" style="background:#f0b90b"></span>SCHD <b class="${schdLive === null ? "" : cls(schdLive)}">${schdLive === null ? (bench.length ? signed(bench[bench.length - 1]!.r) + "%" : "—") : signed(schdLive) + "%"}</b></span>`,
   ].join("");
 
-  return `<h2>📈 Equity Race <span class="sub">top ${series.length} vs SCHD · % return, rebased</span></h2>
-    <div class="chartwrap"><svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-      <line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 4"/>
+  return `<h2>📈 Equity Race <span class="sub">top ${series.length} vs SCHD · % return since experiment start</span></h2>
+    <div class="chartwrap"><svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative % return of the top arms versus SCHD since the experiment started">
+      ${yGrid}${xGrid}
       ${benchPath}${armPaths}
     </svg><div class="legend">${legend}</div></div>`;
 }
@@ -379,6 +412,33 @@ function rebase(pts: { t: string; v: number }[]): { t: number; r: number }[] {
   const base = pts[0]!.v || 1;
   return pts.map((p) => ({ t: new Date(p.t).getTime(), r: (p.v / base - 1) * 100 }));
 }
+
+// Rebase to % return from a SHARED epoch t0: drop anything before t0, then
+// measure each series off its first surviving point. Every line then reads 0%
+// at the same instant, so their shapes are directly comparable.
+function rebaseFrom(pts: { t: string; v: number }[], t0: number): { t: number; r: number }[] {
+  const kept = pts
+    .map((p) => ({ t: new Date(p.t).getTime(), v: p.v }))
+    .filter((p) => p.t >= t0)
+    .sort((a, b) => a.t - b.t);
+  if (!kept.length) return [];
+  const base = kept[0]!.v || 1;
+  return kept.map((p) => ({ t: p.t, r: (p.v / base - 1) * 100 }));
+}
+
+// "Nice" round axis ticks (…, 1, 2, 5, 10, …) spanning [min,max], always
+// including 0 when the range straddles it.
+function niceTicks(min: number, max: number, target = 5): number[] {
+  const span = (max - min) || 1;
+  const mag = Math.pow(10, Math.floor(Math.log10(span / target)));
+  const norm = span / target / mag;
+  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
+  const ticks: number[] = [];
+  const start = Math.ceil(min / step - 1e-9) * step;
+  for (let v = start; v <= max + 1e-9; v += step) ticks.push(Math.abs(v) < 1e-9 ? 0 : Number(v.toFixed(6)));
+  if (!ticks.some((t) => Math.abs(t) < 1e-9) && min <= 0 && max >= 0) ticks.push(0);
+  return ticks;
+}
 // #endregion
 
 // #region page shell
@@ -441,8 +501,12 @@ function shell(body: string, field = ARMS.length): string {
     @media(max-width:640px){.rrow,.schdrow{grid-template-columns:1.4rem 7rem 1fr 3.6rem;}.rmeta{display:none;}}
 
     /* chart */
-    .chartwrap{margin-top:.4rem;}
-    svg.chart{width:100%;height:300px;display:block;}
+    .chartwrap{margin-top:.4rem;overflow-x:auto;}
+    /* Box aspect ratio == viewBox (1120:300) so preserveAspectRatio="none"
+       scales uniformly and the axis labels are never stretched. min-width keeps
+       it legible on phones (scrolls instead of squishing). */
+    svg.chart{width:100%;min-width:640px;aspect-ratio:1120 / 300;height:auto;display:block;}
+    svg.chart .axlbl{fill:var(--muted);font-size:13px;font-weight:600;}
     .legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem;font-weight:600;margin-top:.5rem;}
     .legend .k{display:inline-flex;align-items:center;gap:.4rem;}
     .swatch{width:.85rem;height:.28rem;border-radius:2px;display:inline-block;}
