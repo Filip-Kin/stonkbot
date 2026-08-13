@@ -59,6 +59,13 @@ function tradingHeaders(): HeadersInit {
 // kills the request at idleTimeout → blank page) and can stall the bot cycle.
 // Cap every Alpaca call so a slow upstream fails fast and degrades gracefully.
 const ALPACA_TIMEOUT_MS = 8000;
+// The experiment's batched multi-symbol pulls (130-symbol union, paginated 5Min
+// bars = tens of thousands of rows/page) are far heavier than the bot's
+// single-symbol calls, so 8s trips on transient IEX slowness. Give batch reads a
+// generous per-page cap plus a retry (see fetchWithRetry) so a blip no longer
+// kills the whole cycle.
+const ALPACA_BATCH_TIMEOUT_MS = 20000;
+const BATCH_RETRIES = 2;
 
 async function trading<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${config.alpaca.tradingUrl}${path}`, {
@@ -73,16 +80,34 @@ async function trading<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function data<T>(path: string): Promise<T> {
+async function data<T>(path: string, timeoutMs: number = ALPACA_TIMEOUT_MS): Promise<T> {
   const res = await fetch(`${config.alpaca.dataUrl}${path}`, {
     headers: tradingHeaders(),
-    signal: AbortSignal.timeout(ALPACA_TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Alpaca data ${path} ${res.status}: ${body}`);
   }
   return (await res.json()) as T;
+}
+
+// Retry a data() read on a transient AbortSignal timeout. Only TimeoutError is
+// retried (a 4xx/5xx from Alpaca surfaces immediately); short linear backoff.
+function isTimeout(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "TimeoutError";
+}
+
+async function dataWithRetry<T>(path: string, timeoutMs: number, retries: number): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await data<T>(path, timeoutMs);
+    } catch (err) {
+      if (attempt >= retries || !isTimeout(err)) throw err;
+      console.warn(`[alpaca] batch read timed out (attempt ${attempt + 1}/${retries + 1}), retrying`);
+      await Bun.sleep(500 * (attempt + 1));
+    }
+  }
 }
 
 // #region raw response coercion
@@ -228,8 +253,10 @@ export async function getBarsBatch(
       feed: "iex",
     });
     if (pageToken) params.set("page_token", pageToken);
-    const resp = await data<{ bars: Record<string, Bar[]> | null; next_page_token: string | null }>(
+    const resp = await dataWithRetry<{ bars: Record<string, Bar[]> | null; next_page_token: string | null }>(
       `/v2/stocks/bars?${params.toString()}`,
+      ALPACA_BATCH_TIMEOUT_MS,
+      BATCH_RETRIES,
     );
     for (const [sym, bars] of Object.entries(resp.bars ?? {})) {
       (out[sym] ??= []).push(...bars);
@@ -245,8 +272,10 @@ export async function getLatestPricesBatch(symbols: string[]): Promise<Record<st
   const out: Record<string, number> = {};
   if (symbols.length === 0) return out;
   const params = new URLSearchParams({ symbols: symbols.join(","), feed: "iex" });
-  const resp = await data<{ trades?: Record<string, { p: number }> }>(
+  const resp = await dataWithRetry<{ trades?: Record<string, { p: number }> }>(
     `/v2/stocks/trades/latest?${params.toString()}`,
+    ALPACA_BATCH_TIMEOUT_MS,
+    BATCH_RETRIES,
   );
   for (const [sym, trade] of Object.entries(resp.trades ?? {})) {
     if (trade && typeof trade.p === "number") out[sym] = trade.p;
