@@ -12,7 +12,19 @@ export interface NotifyOpts {
   priority?: number; // ntfy priority 1..5 (default 3)
 }
 
+// Per-process kill switch. Each service (bot / dashboard / experiment) runs as
+// its own process, so an entrypoint that flips this off silences only itself and
+// leaves the other services' notifications untouched. This is deliberately a
+// code flag rather than an env var: under Coolify the three services share one
+// app-level env, so blanking the ntfy topic there would also mute the experiment
+// check-ins we want to keep.
+let enabled = true;
+export function setNotifyEnabled(v: boolean): void {
+  enabled = v;
+}
+
 export async function notify(title: string, message: string, opts: NotifyOpts = {}): Promise<void> {
+  if (!enabled) return;
   const sent = await Promise.all([sendNtfy(title, message, opts), sendHa(title, message)]);
   if (!sent.some(Boolean)) console.log(`[notify:noop] ${title} - ${message}`);
 }

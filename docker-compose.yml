@@ -4,13 +4,10 @@ services:
     container_name: stonkbot
     restart: unless-stopped
     env_file: .env
-    # Notifications temporarily silenced for the standalone live bot (2026-08-12):
-    # blanking both channels makes notify() a no-op (fails soft) without touching
-    # the experiment container, which keeps its own .env values + daily check-ins.
-    # Remove this block to re-enable the live bot's pushes.
-    environment:
-      - NTFY_TOPIC=
-      - HA_TOKEN=
+    # Live-bot notifications are silenced in code (src/index.ts gates notify() off
+    # unless BOT_NOTIFY=1). Done in code rather than by blanking the ntfy topic
+    # here because under Coolify the three services share one app-level env, so a
+    # blank topic would also mute the experiment's daily check-ins.
     volumes:
       - ./data:/app/data
     # Reach Home Assistant on the host.

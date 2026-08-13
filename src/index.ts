@@ -20,7 +20,7 @@ import {
   appendTrade, recordDailySummary, migrateFromJson,
 } from "./db";
 import { getBars } from "./alpaca";
-import { notify } from "./notify";
+import { notify, setNotifyEnabled } from "./notify";
 
 // US/Eastern trading-day string, e.g. "2026-08-08".
 function usTradingDay(now: Date): string {
@@ -301,6 +301,14 @@ async function sendDailySummary(): Promise<void> {
 async function main(): Promise<void> {
   const once = process.argv.includes("--once");
   console.log(`stonkbot starting: mode=${config.mode} tradingEnabled=${config.tradingEnabled} once=${once}`);
+
+  // Live-bot notifications are silenced for now (2026-08-12). Set BOT_NOTIFY=1 to
+  // re-enable. This only affects the bot process; the experiment container keeps
+  // its own daily check-in pushes.
+  if (process.env.BOT_NOTIFY !== "1") {
+    setNotifyEnabled(false);
+    console.log("[notify] live-bot notifications disabled (set BOT_NOTIFY=1 to re-enable)");
+  }
 
   if (!config.alpaca.keyId || !config.alpaca.secretKey) {
     console.error("No Alpaca keys set. Copy .env.example to .env and fill in ALPACA_KEY_ID / ALPACA_SECRET_KEY.");
