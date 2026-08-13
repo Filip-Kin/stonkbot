@@ -289,16 +289,40 @@ function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): strin
       <text x="${padL - 8}" y="${yy}" text-anchor="end" dominant-baseline="middle" class="axlbl">${zero ? "0" : v.toFixed(Math.abs(v) < 1 ? 2 : 1)}%</text>`;
   }).join("");
 
-  // X ticks: one per ET calendar day, placed on the compressed axis.
+  // X ticks: an ADAPTIVE ET time scale on the compressed axis. While the whole
+  // race fits in a day or two, tick the clock (9:30, 11:00, 13:00 …) so you can
+  // read time-of-day; once it spans more days, fall back to one date tick per
+  // day (thinned so a 4-week run doesn't crowd). Each day's first tick carries
+  // the date, later intraday ticks show just the time.
   const dayFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric" });
-  let lastDay = "";
-  const xGrid = times.map((t) => {
-    const d = dayFmt.format(new Date(t));
-    if (d === lastDay) return "";
-    lastDay = d;
+  const clockFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: false });
+  const etDay = (t: number) => dayFmt.format(new Date(t));
+  const etClock = (t: number) => clockFmt.format(new Date(t)).replace(/^24:/, "0:");
+  const etMinutes = (t: number) => { const [h, m] = etClock(t).split(":"); return Number(h) * 60 + Number(m); };
+
+  const dayCount = new Set(times.map(etDay)).size;
+  const stepMin = dayCount <= 1 ? 60 : dayCount <= 3 ? 120 : 0; // 0 => one tick per day
+  const dayEvery = Math.max(1, Math.ceil(dayCount / 8));
+  const hhmm = (mins: number) => `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, "0")}`;
+  const xTick = (t: number, label: string) => {
     const xx = x(t).toFixed(1);
     return `<line x1="${xx}" y1="${padT}" x2="${xx}" y2="${H - padB}" stroke="var(--border)" stroke-width="1" stroke-dasharray="2 5" opacity=".35"/>
-      <text x="${xx}" y="${H - padB + 15}" text-anchor="middle" class="axlbl">${d}</text>`;
+      <text x="${xx}" y="${H - padB + 15}" text-anchor="middle" class="axlbl">${label}</text>`;
+  };
+  let lastDay = "", lastSlot = -1, dayIdx = -1;
+  const xGrid = times.map((t) => {
+    const d = etDay(t);
+    if (d !== lastDay) {
+      lastDay = d; dayIdx++;
+      lastSlot = stepMin ? Math.floor(etMinutes(t) / stepMin) : -1;
+      if (stepMin) return xTick(t, `${d} ${etClock(t)}`); // day's first tick = the open, exact
+      return dayIdx % dayEvery === 0 ? xTick(t, d) : "";
+    }
+    if (!stepMin) return "";
+    const slot = Math.floor(etMinutes(t) / stepMin);
+    if (slot === lastSlot) return "";
+    lastSlot = slot;
+    return xTick(t, hhmm(slot * stepMin)); // label the round boundary (11:00), not the 11:01 sample
   }).join("");
 
   // Direct end-of-line labels (so you don't have to match legend colours). Push
@@ -347,7 +371,11 @@ function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): strin
   return `<h2>📈 Equity Race <span class="sub">top ${NCOMP} + Control vs SCHD · % return since experiment start</span></h2>
     <div class="chartwrap"><svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative % return of the top arms, the Control, and SCHD since the experiment started. Hover a line to isolate it.">
       ${yGrid}${xGrid}${drawn}
-    </svg><div class="legend">${legend}</div></div>`;
+    </svg><div class="legend">${legend}</div>
+    <p class="chartnote">Source: Alpaca (IEX free feed), sampled every 5 min during US market hours; times ET.
+      Arms are paper-simulated $1,000 books (fills at the last trade price, no slippage or fees).
+      SCHD is the live ETF price rebased to the same start. Each line is cumulative % return from ${dayFmt.format(new Date(t0))}.</p>
+    </div>`;
 }
 // #endregion
 
@@ -555,6 +583,7 @@ function shell(body: string, field = ARMS.length): string {
     svg.chart:hover .ser{opacity:.16;}
     svg.chart:hover .ser:hover{opacity:1;}
     .legend .swatch.dash{width:1rem;height:0;border-top:2px dashed var(--c);border-radius:0;}
+    .chartnote{margin:.55rem 0 0;font-size:.72rem;line-height:1.5;color:var(--muted);max-width:70ch;}
     .legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem;font-weight:600;margin-top:.5rem;}
     .legend .k{display:inline-flex;align-items:center;gap:.4rem;}
     .swatch{width:.85rem;height:.28rem;border-radius:2px;display:inline-block;}
