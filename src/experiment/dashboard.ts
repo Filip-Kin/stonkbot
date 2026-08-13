@@ -222,16 +222,20 @@ function renderRace(board: ArmLeaderboardRow[], schd: number | null): string {
 
 // #region multi-line equity chart (top arms vs SCHD)
 function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): string {
-  const TOP = 8;
-  const top = board.slice(0, TOP);
-  const rawArms = top.map((r) => ({
-    name: r.name || `Arm ${r.armId}`,
-    color: blockOf(r.armId).color,
-    raw: loadArmEquitySeries(r.armId).map((p) => ({ t: p.t, v: p.equity })),
-  })).filter((s) => s.raw.length >= 2);
+  const CONTROL_ID = 1;      // "The Control" — the yardstick, always shown
+  const NCOMP = 5;           // how many competitor arms to plot besides Control
+  // Distinct hues (not the repeating block palette) so 5 arms are each their own
+  // colour. Amber/grey are reserved below for the SCHD/Control reference lines.
+  const PALETTE = ["#5b9dff", "#ff5c8a", "#2ee6a6", "#ff9d3c", "#b98bff"];
+  const short = (s: string, n = 15) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-  if (rawArms.length === 0) {
-    return `<h2>📈 Equity Race <span class="sub">top ${TOP} vs SCHD</span></h2>
+  const compRows = board.filter((r) => r.armId !== CONTROL_ID).slice(0, NCOMP);
+  const controlRow = board.find((r) => r.armId === CONTROL_ID);
+  const armRows = [...compRows, ...(controlRow ? [controlRow] : [])];
+  const rawById = new Map(armRows.map((r) => [r.armId, loadArmEquitySeries(r.armId).map((p) => ({ t: p.t, v: p.equity }))]));
+
+  if (!compRows.some((r) => (rawById.get(r.armId)?.length ?? 0) >= 2)) {
+    return `<h2>📈 Equity Race <span class="sub">top ${NCOMP} + Control vs SCHD</span></h2>
       <p class="muted">Curves populate as equity samples accrue…</p>`;
   }
 
@@ -240,19 +244,23 @@ function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): strin
   // history, so the old per-series rebase put SCHD's 0% two days left of the
   // arms' 0% — the lines started at different points and couldn't be compared.
   // (This matches the t0 the hero/standings already use for the SCHD number.)
-  const t0 = Math.min(...rawArms.flatMap((s) => s.raw.map((p) => new Date(p.t).getTime())));
+  const t0 = Math.min(...armRows.flatMap((r) => (rawById.get(r.armId) ?? []).map((p) => new Date(p.t).getTime())));
 
-  const series = rawArms
-    .map((s) => ({ name: s.name, color: s.color, pts: rebaseFrom(s.raw, t0) }))
-    .filter((s) => s.pts.length >= 2);
-  const bench = rebaseFrom(
-    loadBenchmarkHistory().filter((p) => inRegularHours(p.t)).map((p) => ({ t: p.t, v: p.price })),
-    t0,
-  );
+  type Line = { name: string; color: string; dash: string | null; width: number; ref: boolean; pts: { t: number; r: number }[] };
+  const series: Line[] = [];
+  compRows.forEach((r, i) => {
+    const pts = rebaseFrom(rawById.get(r.armId) ?? [], t0);
+    if (pts.length < 2) return;
+    series.push({ name: r.name || `Arm ${r.armId}`, color: PALETTE[i % PALETTE.length]!, dash: null, width: i === 0 ? 3 : 2, ref: false, pts });
+  });
+  const controlPts = controlRow ? rebaseFrom(rawById.get(CONTROL_ID) ?? [], t0) : [];
+  if (controlPts.length >= 2) series.push({ name: "Control", color: "#aab2c0", dash: "1 5", width: 2, ref: true, pts: controlPts });
+  const bench = rebaseFrom(loadBenchmarkHistory().filter((p) => inRegularHours(p.t)).map((p) => ({ t: p.t, v: p.price })), t0);
+  if (bench.length >= 2) series.push({ name: "SCHD", color: "#f0b90b", dash: "6 4", width: 2, ref: true, pts: bench });
 
-  const W = 1120, H = 300, padL = 60, padR = 14, padT = 16, padB = 30;
+  const W = 1120, H = 300, padL = 60, padR = 132, padT = 16, padB = 30;
   const plotW = W - padL - padR;
-  const allPts = [...series.flatMap((s) => s.pts), ...bench];
+  const allPts = series.flatMap((s) => s.pts);
   const rMin = Math.min(0, ...allPts.map((p) => p.r));
   const rMax = Math.max(0, ...allPts.map((p) => p.r));
   const rRange = rMax - rMin || 1;
@@ -293,20 +301,52 @@ function renderChart(board: ArmLeaderboardRow[], schdLive: number | null): strin
       <text x="${xx}" y="${H - padB + 15}" text-anchor="middle" class="axlbl">${d}</text>`;
   }).join("");
 
-  const benchPath = bench.length >= 2
-    ? `<path d="${pathOf(bench)}" fill="none" stroke="#f0b90b" stroke-width="2" stroke-dasharray="5 4" opacity=".85"/>` : "";
-  const armPaths = series.map((s) =>
-    `<path d="${pathOf(s.pts)}" fill="none" stroke="${s.color}" stroke-width="2" opacity=".9"/>`).join("");
+  // Direct end-of-line labels (so you don't have to match legend colours). Push
+  // labels apart vertically so they never overlap, then keep them on-canvas.
+  const rawY = series.map((s) => y(s.pts[s.pts.length - 1]!.r));
+  const order = series.map((_, i) => i).sort((a, b) => rawY[a]! - rawY[b]!);
+  const labelY: number[] = [];
+  const MIN = 15;
+  let prev = -Infinity;
+  for (const i of order) { const yv = Math.max(rawY[i]!, prev + MIN); labelY[i] = yv; prev = yv; }
+  const overflow = (labelY[order[order.length - 1]!] ?? 0) - (H - 6);
+  if (overflow > 0) for (const i of order) labelY[i]! -= overflow;
+  const topClip = (padT + 4) - (labelY[order[0]!] ?? padT);
+  if (topClip > 0) for (const i of order) labelY[i]! += topClip;
 
-  const legend = [
-    ...series.map((s) => `<span class="k"><span class="swatch" style="background:${s.color}"></span>${esc(s.name)} <b class="${cls(s.pts[s.pts.length - 1]!.r)}">${signed(s.pts[s.pts.length - 1]!.r)}%</b></span>`),
-    `<span class="k"><span class="swatch" style="background:#f0b90b"></span>SCHD <b class="${schdLive === null ? "" : cls(schdLive)}">${schdLive === null ? (bench.length ? signed(bench[bench.length - 1]!.r) + "%" : "—") : signed(schdLive) + "%"}</b></span>`,
+  const labelX = W - padR + 12;
+  const groups = series.map((s, i) => {
+    const d = pathOf(s.pts);
+    const last = s.pts[s.pts.length - 1]!;
+    const ex = x(last.t).toFixed(1), ey = y(last.r).toFixed(1);
+    const ly = labelY[i]!.toFixed(1);
+    const dash = s.dash ? ` stroke-dasharray="${s.dash}"` : "";
+    return `<g class="ser${s.ref ? " ref" : ""}">
+      <path d="${d}" fill="none" stroke="transparent" stroke-width="13"/>
+      <path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width}"${dash} stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${ex}" cy="${ey}" r="2.6" fill="${s.color}"/>
+      <line x1="${ex}" y1="${ey}" x2="${(labelX - 4).toFixed(1)}" y2="${ly}" stroke="${s.color}" stroke-width="1" opacity=".35"/>
+      <text x="${labelX}" y="${ly}" dominant-baseline="middle" class="endlbl" fill="${s.color}">${esc(short(s.name))}${s.ref ? " ·ref" : ""}</text>
+    </g>`;
+  });
+  // Draw references first (underneath), then competitors, leader last (on top).
+  const drawn = [
+    ...groups.filter((_, i) => series[i]!.ref),
+    ...groups.filter((_, i) => !series[i]!.ref).reverse(),
   ].join("");
 
-  return `<h2>📈 Equity Race <span class="sub">top ${series.length} vs SCHD · % return since experiment start</span></h2>
-    <div class="chartwrap"><svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative % return of the top arms versus SCHD since the experiment started">
-      ${yGrid}${xGrid}
-      ${benchPath}${armPaths}
+  const legend = series.map((s) => {
+    const lastR = s.pts[s.pts.length - 1]!.r;
+    const val = s.name === "SCHD" && schdLive !== null ? schdLive : lastR;
+    const sw = s.ref
+      ? `<span class="swatch dash" style="--c:${s.color}"></span>`
+      : `<span class="swatch" style="background:${s.color}"></span>`;
+    return `<span class="k">${sw}${esc(s.name)} <b class="${cls(val)}">${signed(val)}%</b></span>`;
+  }).join("");
+
+  return `<h2>📈 Equity Race <span class="sub">top ${NCOMP} + Control vs SCHD · % return since experiment start</span></h2>
+    <div class="chartwrap"><svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Cumulative % return of the top arms, the Control, and SCHD since the experiment started. Hover a line to isolate it.">
+      ${yGrid}${xGrid}${drawn}
     </svg><div class="legend">${legend}</div></div>`;
 }
 // #endregion
@@ -507,6 +547,14 @@ function shell(body: string, field = ARMS.length): string {
        it legible on phones (scrolls instead of squishing). */
     svg.chart{width:100%;min-width:640px;aspect-ratio:1120 / 300;height:auto;display:block;}
     svg.chart .axlbl{fill:var(--muted);font-size:13px;font-weight:600;}
+    svg.chart .endlbl{font-size:12.5px;font-weight:700;}
+    /* Reference lines (SCHD, Control) sit quieter than the competitors. */
+    svg.chart .ser.ref{opacity:.7;}
+    /* Hover any line to isolate it: everything else fades back. */
+    svg.chart .ser{transition:opacity .12s ease;}
+    svg.chart:hover .ser{opacity:.16;}
+    svg.chart:hover .ser:hover{opacity:1;}
+    .legend .swatch.dash{width:1rem;height:0;border-top:2px dashed var(--c);border-radius:0;}
     .legend{display:flex;gap:1rem;flex-wrap:wrap;font-size:.78rem;font-weight:600;margin-top:.5rem;}
     .legend .k{display:inline-flex;align-items:center;gap:.4rem;}
     .swatch{width:.85rem;height:.28rem;border-radius:2px;display:inline-block;}
