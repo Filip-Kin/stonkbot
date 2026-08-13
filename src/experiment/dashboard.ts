@@ -10,7 +10,8 @@ import {
   loadArmLeaderboard, loadArmEquitySeries, loadBenchmarkHistory, getMeta,
   type ArmLeaderboardRow,
 } from "../db";
-import { ARMS } from "./params";
+import { ARMS, BASE_STRATEGY, BASE_RAILS, type Arm } from "./params";
+import { POOLS } from "./pools";
 
 // #region helpers
 function esc(s: string): string {
@@ -41,6 +42,74 @@ function blockOf(id: number): Block {
 }
 const armMeta = new Map(ARMS.map((a) => [a.id, a]));
 function poolOf(id: number): string { return armMeta.get(id)?.pool ?? "P0"; }
+
+// A short human label for each universe pool (id -> what it is + how many names).
+const POOL_DESC: Record<string, string> = {
+  P0: "34 large-caps (control watchlist)",
+  P1: "~100 liquid S&P-100 names",
+  P2: "high-beta semis + growth",
+  P3: "low-vol / dividend blue-chips",
+  P4: "tech-only",
+  P5: "sector-SPDR ETFs",
+};
+function poolLabel(id: string): string {
+  return `${id} · ${POOL_DESC[id] ?? id} (${(POOLS as Record<string, string[]>)[id]?.length ?? "?"})`;
+}
+// #endregion
+
+// #region strategy recipe (concrete param diffs vs the Control)
+// Turns an arm's parameters into a plain-language list of exactly what it changed
+// from the baseline (the Control's config). Derived from the live params, so the
+// on-page explanation can never drift out of sync with what the arm actually runs.
+const pct = (f: number) => `${+(f * 100).toFixed(2)}%`;
+
+function paramChips(a: Arm): string[] {
+  const s = a.strategy, rs = a.rails;
+  const B = BASE_STRATEGY, R = BASE_RAILS;
+  const out: string[] = [];
+
+  // Universe first — the biggest structural difference.
+  if (a.pool !== "P0") out.push(`pool ${poolLabel(a.pool)}`);
+
+  // Entry gates.
+  if (s.rsiOversold !== B.rsiOversold) out.push(`buy dip at RSI ≤ ${s.rsiOversold} (base ${B.rsiOversold})`);
+  if (s.maxDipFraction !== B.maxDipFraction) out.push(`skip dips deeper than ${pct(s.maxDipFraction)} (base ${pct(B.maxDipFraction)})`);
+  if (s.trendSmaPeriodDays !== B.trendSmaPeriodDays) out.push(`uptrend gate = ${s.trendSmaPeriodDays}-day SMA (base ${B.trendSmaPeriodDays})`);
+  if (s.newsVeto !== B.newsVeto) out.push(s.newsVeto ? "AI news veto ON" : "AI news veto OFF");
+
+  // Exits.
+  if (s.atrStopMult !== null) out.push(`stop = ${s.atrStopMult}× ATR (volatility-scaled)`);
+  else if (s.stopLossFraction !== B.stopLossFraction) out.push(`stop-loss ${pct(s.stopLossFraction)} (base ${pct(B.stopLossFraction)})`);
+
+  if (s.atrTakeProfitMult !== null) out.push(`take-profit = ${s.atrTakeProfitMult}× ATR`);
+  else if (s.takeProfitFraction !== B.takeProfitFraction) {
+    out.push(s.takeProfitFraction === null ? "no fixed take-profit" : `take-profit ${pct(s.takeProfitFraction)} (base ${pct(B.takeProfitFraction!)})`);
+  }
+
+  if (s.trailingStopFraction !== B.trailingStopFraction && s.trailingStopFraction !== null) {
+    out.push(`trailing stop ${pct(s.trailingStopFraction)} below the high`);
+  }
+  if (s.rsiOverbought !== B.rsiOverbought) {
+    out.push(s.rsiOverbought === null ? "RSI momentum exit OFF (let winners run)" : `RSI momentum exit at ${s.rsiOverbought}`);
+  }
+  if (s.minHoldMinutes !== B.minHoldMinutes) out.push(`min hold ${s.minHoldMinutes}m before a discretionary exit`);
+
+  // Sizing & rails.
+  if (rs.maxPositionFraction !== R.maxPositionFraction) out.push(`position size ${pct(rs.maxPositionFraction)} of equity (base ${pct(R.maxPositionFraction)})`);
+  if (rs.maxOpenPositions !== R.maxOpenPositions) out.push(`max ${rs.maxOpenPositions} open positions (base ${R.maxOpenPositions})`);
+  if (rs.maxPerSector !== R.maxPerSector) out.push(Number.isFinite(rs.maxPerSector) ? `max ${rs.maxPerSector} per sector (base ${R.maxPerSector})` : "no per-sector cap");
+  if (rs.cashBufferFraction !== R.cashBufferFraction) out.push(`cash buffer ${pct(rs.cashBufferFraction)} (base ${pct(R.cashBufferFraction)})`);
+  if (rs.dailyLossCapFraction !== R.dailyLossCapFraction) out.push(`daily loss halt at ${pct(rs.dailyLossCapFraction)} (base ${pct(R.dailyLossCapFraction)})`);
+  if (rs.maxBuysPerCycle !== R.maxBuysPerCycle) out.push(`${rs.maxBuysPerCycle} buys per cycle (base ${R.maxBuysPerCycle})`);
+
+  if (out.length === 0) out.push("exact baseline config — the untouched yardstick");
+  return out;
+}
+
+// One-line joined recipe, for hover tooltips.
+function strategyText(a: Arm): string {
+  return paramChips(a).join(" · ");
+}
 // #endregion
 
 type SortKey = "return" | "expectancy" | "pf" | "winrate" | "drawdown" | "trades";
@@ -81,6 +150,7 @@ export async function renderExperiment(sort: SortKey = "return"): Promise<string
     ${renderRace(board, schdReturn)}
     ${renderChart(board, schdReturn)}
     ${renderTable(board, sort, schdReturn)}
+    ${renderPlaybook()}
     ${renderLegend()}
   `, board.length);
 }
@@ -92,6 +162,8 @@ function renderHero(champ: ArmLeaderboardRow, schd: number | null, beating: numb
   const beatLine = beating !== null
     ? `<b class="${beating > field / 2 ? "up" : "down"}">${beating}/${field}</b> arms beating SCHD (${schd === null ? "—" : signed(schd) + "%"})`
     : "SCHD warming up";
+  const arm = armMeta.get(champ.armId);
+  const chips = arm ? paramChips(arm).map((c) => `<span class="chip">${esc(c)}</span>`).join("") : "";
   return `<div class="hero">
     <div class="crown">👑 CURRENT CHAMPION</div>
     <div class="champ">
@@ -99,6 +171,7 @@ function renderHero(champ: ArmLeaderboardRow, schd: number | null, beating: numb
       <span class="cret ${cls(champ.returnPct)}">${signed(champ.returnPct)}%</span>
     </div>
     <div class="chyp">${esc(champ.hypothesis)}</div>
+    ${chips ? `<div class="chips herochips">${chips}</div>` : ""}
     <div class="csub">${beatLine} · ${field} algorithms · $1,000 each · winner trades real money 💵</div>
   </div>`;
 }
@@ -126,7 +199,9 @@ function renderRace(board: ArmLeaderboardRow[], schd: number | null): string {
       ? `<i class="pos" style="left:50%;width:${w.toFixed(1)}%;background:${b.color}"></i>`
       : `<i class="neg" style="right:50%;width:${w.toFixed(1)}%;background:${b.color}"></i>`;
     const medal = medals[i] ?? `<span class="rank">${i + 1}</span>`;
-    return `<div class="rrow" title="${esc(r.hypothesis)}">
+    const arm = armMeta.get(r.armId);
+    const tip = arm ? `${r.hypothesis}\n\nStrategy: ${strategyText(arm)}` : r.hypothesis;
+    return `<div class="rrow" title="${esc(tip)}">
       <span class="rmedal">${medal}</span>
       <span class="rname"><span class="dot" style="background:${b.color}"></span>${esc(name)}</span>
       <span class="rtrack"><span class="mid"></span>${bar}</span>
@@ -225,9 +300,11 @@ function renderTable(board: ArmLeaderboardRow[], sort: SortKey, schd: number | n
     const pf = r.profitFactor === null ? "—" : r.profitFactor.toFixed(2);
     const inconclusive = r.trades < 30;
     const beatSchd = schd !== null && r.returnPct > schd;
+    const arm = armMeta.get(r.armId);
+    const tip = arm ? `${r.hypothesis}\n\nStrategy: ${strategyText(arm)}` : r.hypothesis;
     return `<tr>
       <td class="muted">${i + 1}</td>
-      <td><span class="dot" style="background:${b.color}"></span><b>${esc(name)}</b>
+      <td title="${esc(tip)}"><span class="dot" style="background:${b.color}"></span><b>${esc(name)}</b>
         <span class="btag" style="color:${b.color}">${b.label}</span>
         <span class="pooltag">${poolOf(r.armId)}</span>${beatSchd ? ` <span class="beat">▲SCHD</span>` : ""}</td>
       <td class="${cls(r.returnPct)}"><b>${signed(r.returnPct)}%</b></td>
@@ -243,6 +320,38 @@ function renderTable(board: ArmLeaderboardRow[], sort: SortKey, schd: number | n
   return `<h2>🔬 Full Metrics <span class="sub">click a column to rank · * = &lt;30 trades, inconclusive</span></h2>
     <div class="scroll"><table>
       <tr><th>#</th><th>Algorithm</th>${th("return", "Return")}${th("expectancy", "Expectancy $")}${th("pf", "Profit factor")}${th("winrate", "Win rate")}${th("drawdown", "Max DD")}${th("trades", "Trades")}<th>Open</th></tr>
+      ${rows}
+    </table></div>`;
+}
+// #endregion
+
+// #region playbook (what every arm actually does)
+// A browsable reference of all 40 strategies in pre-registered order: the exact
+// knob changes each arm makes vs the Control (as chips) plus its thesis. This is
+// the "what is each bot doing" answer, always in sync with the live params.
+function renderPlaybook(): string {
+  let lastBlock = "";
+  const rows = ARMS.map((a) => {
+    const b = blockOf(a.id);
+    const name = a.name || `Arm ${a.id}`;
+    const chips = paramChips(a).map((c) => `<span class="chip">${esc(c)}</span>`).join("");
+    let header = "";
+    if (b.label !== lastBlock) {
+      lastBlock = b.label;
+      header = `<tr class="blockhead"><td colspan="3"><span class="dot" style="background:${b.color}"></span>${b.label}</td></tr>`;
+    }
+    return `${header}<tr>
+      <td class="pbname"><b>${esc(name)}</b>
+        <span class="pbid muted">#${a.id}</span>
+        <span class="pooltag">${a.pool}</span></td>
+      <td class="pbchips"><div class="chips">${chips}</div></td>
+      <td class="pbwhy muted">${esc(a.hypothesis)}</td>
+    </tr>`;
+  }).join("");
+
+  return `<h2>📖 The Playbook <span class="sub">what each algorithm changes vs the Control, and why</span></h2>
+    <div class="scroll"><table class="playbook">
+      <tr><th>Algorithm</th><th>What it does differently</th><th>Thesis</th></tr>
       ${rows}
     </table></div>`;
 }
@@ -348,6 +457,20 @@ function shell(body: string, field = ARMS.length): string {
     .btag{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.03em;margin-left:.35rem;}
     .pooltag{font-size:.66rem;color:var(--muted);margin-left:.3rem;border:1px solid var(--border);border-radius:.3rem;padding:0 .25rem;}
     .beat{font-size:.66rem;color:var(--green);font-weight:800;}
+
+    /* strategy chips + playbook */
+    .chips{display:flex;gap:.35rem;flex-wrap:wrap;}
+    .chip{font-size:.72rem;font-weight:600;line-height:1.3;color:var(--text);
+      background:var(--panel2);border:1px solid var(--border);border-radius:.4rem;padding:.1rem .45rem;white-space:nowrap;}
+    .herochips{margin-top:.6rem;}
+    .herochips .chip{background:rgba(255,255,255,.04);}
+    table.playbook th,table.playbook td{white-space:normal;vertical-align:top;}
+    table.playbook td.pbname{white-space:nowrap;min-width:9rem;}
+    table.playbook td.pbchips{min-width:20rem;}
+    table.playbook td.pbwhy{font-size:.8rem;max-width:34ch;min-width:16rem;}
+    .pbid{font-size:.68rem;margin-left:.3rem;}
+    .blockhead td{background:var(--panel);font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);}
+    .blockhead .dot{margin-right:.45rem;}
 
     .blocklegend{display:flex;gap:1.1rem;flex-wrap:wrap;font-size:.76rem;color:var(--muted);font-weight:600;margin-top:1rem;}
     .blocklegend .k{display:inline-flex;align-items:center;gap:.4rem;}

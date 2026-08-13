@@ -52,7 +52,7 @@ export interface Arm {
 
 // Baseline = the live bot's current config (config.ts). minHoldMinutes starts at
 // 0 to match the live bot, where that knob is currently dead (never enforced).
-const BASE_STRATEGY: StrategyParams = {
+export const BASE_STRATEGY: StrategyParams = {
   rsiOversold: 35,
   maxDipFraction: 0.05,
   trendSmaPeriodDays: 50,
@@ -69,7 +69,7 @@ const BASE_STRATEGY: StrategyParams = {
   minHoldMinutes: 0,
 };
 
-const BASE_RAILS: RailsParams = {
+export const BASE_RAILS: RailsParams = {
   maxPositionFraction: 0.12,
   maxOpenPositions: 8,
   maxPerSector: 2,
