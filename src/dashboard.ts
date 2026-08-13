@@ -538,9 +538,17 @@ let cached: { html: string; at: number } | null = null;
 async function renderCached(): Promise<string> {
   const now = Date.now();
   if (cached && now - cached.at < CACHE_MS) return cached.html;
-  const html = await render();
-  cached = { html, at: now };
-  return html;
+  try {
+    const html = await render();
+    cached = { html, at: now };
+    return html;
+  } catch (err) {
+    // A render failure (e.g. Alpaca down) should not blank the public page.
+    // Serve the last good render if we have one; otherwise rethrow to the
+    // route handler's error page.
+    if (cached) return cached.html;
+    throw err;
+  }
 }
 // #endregion
 
@@ -624,6 +632,10 @@ async function experimentCached(sort: ExpSort): Promise<string> {
 
 const server = Bun.serve({
   port: config.dashboardPort,
+  // Default is 10s. A cold render fans out several Alpaca calls (each capped at
+  // 8s); give the request enough headroom to finish and serve rather than being
+  // reaped mid-render.
+  idleTimeout: 30,
   async fetch(req) {
     const { pathname, searchParams } = new URL(req.url);
     if (pathname === "/api/state") {

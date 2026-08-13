@@ -53,10 +53,18 @@ function tradingHeaders(): HeadersInit {
   };
 }
 
+// Bun's fetch has NO default timeout, so a slow/hung Alpaca connection would
+// block a caller forever. That's fatal for the dashboard (its render's
+// Promise.allSettled can't degrade if the fetches never settle → Bun.serve
+// kills the request at idleTimeout → blank page) and can stall the bot cycle.
+// Cap every Alpaca call so a slow upstream fails fast and degrades gracefully.
+const ALPACA_TIMEOUT_MS = 8000;
+
 async function trading<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${config.alpaca.tradingUrl}${path}`, {
     ...init,
     headers: { ...tradingHeaders(), ...(init?.headers ?? {}) },
+    signal: AbortSignal.timeout(ALPACA_TIMEOUT_MS),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -68,6 +76,7 @@ async function trading<T>(path: string, init?: RequestInit): Promise<T> {
 async function data<T>(path: string): Promise<T> {
   const res = await fetch(`${config.alpaca.dataUrl}${path}`, {
     headers: tradingHeaders(),
+    signal: AbortSignal.timeout(ALPACA_TIMEOUT_MS),
   });
   if (!res.ok) {
     const body = await res.text();
