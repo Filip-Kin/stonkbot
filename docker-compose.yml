@@ -1,0 +1,60 @@
+services:
+  bot:
+    build: .
+    container_name: stonkbot
+    restart: unless-stopped
+    env_file: .env
+    # Notifications temporarily silenced for the standalone live bot (2026-08-12):
+    # blanking both channels makes notify() a no-op (fails soft) without touching
+    # the experiment container, which keeps its own .env values + daily check-ins.
+    # Remove this block to re-enable the live bot's pushes.
+    environment:
+      - NTFY_TOPIC=
+      - HA_TOKEN=
+    volumes:
+      - ./data:/app/data
+    # Reach Home Assistant on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - stonknet
+
+  dashboard:
+    build: .
+    container_name: stonkbot-dashboard
+    restart: unless-stopped
+    command: ["bun", "run", "src/dashboard.ts"]
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Bind to loopback only; nginx (stonkbot.filipkin.com) proxies to it.
+    ports:
+      - "127.0.0.1:8771:8771"
+    networks:
+      - stonknet
+
+  # The multi-arm experiment: 40 virtual books racing on shared market data. No
+  # real orders (data-feed reads only), so no separate Alpaca account. Writes arm
+  # tables into the same ./data/stonkbot.db the dashboard reads (WAL-shared).
+  experiment:
+    build: .
+    container_name: stonkbot-experiment
+    restart: unless-stopped
+    command: ["bun", "run", "src/experiment/main.ts"]
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - stonknet
+
+networks:
+  stonknet:
+    # Pin subnet from the host's 10.200.0.0/16 pool (defense in depth; the
+    # daemon pool already constrains, this keeps it deterministic).
+    ipam:
+      config:
+        - subnet: 10.200.42.0/24

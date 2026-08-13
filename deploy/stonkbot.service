@@ -1,0 +1,16 @@
+[Unit]
+Description=stonkbot AI day-trader (paper)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/media/nas/filip/ncdata/filip/files/Projects/stonkbot
+ExecStart=/usr/local/bin/bun run src/index.ts
+EnvironmentFile=/media/nas/filip/ncdata/filip/files/Projects/stonkbot/.env
+Restart=on-failure
+RestartSec=30
+User=filip
+
+[Install]
+WantedBy=multi-user.target
