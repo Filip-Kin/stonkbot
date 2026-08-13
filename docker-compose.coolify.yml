@@ -1,8 +1,8 @@
 # Coolify deployment variant (build + run on the NAS via Coolify).
 # The original docker-compose.yml is kept as-is for plain-docker rollback.
-# Differences: named volume `stonkbot-data` (keeps the live SQLite WAL out of the
-# synced ncdata tree), no fixed container_name/subnet (Coolify manages those).
-# Secrets come from Coolify-managed env (written to .env in the build context).
+# Differences: bind mount `/data/stonkbot` (live SQLite WAL lives outside the
+# synced ncdata tree, on a stable host path), no fixed container_name/subnet
+# (Coolify manages those). Secrets come from Coolify-managed env (.env).
 services:
   bot:
     build: .
@@ -14,7 +14,7 @@ services:
       - NTFY_TOPIC=
       - HA_TOKEN=
     volumes:
-      - stonkbot-data:/app/data
+      - /data/stonkbot:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -24,7 +24,7 @@ services:
     command: ["bun", "run", "src/dashboard.ts"]
     env_file: .env
     volumes:
-      - stonkbot-data:/app/data
+      - /data/stonkbot:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Loopback publish so the existing nginx (stonkbot.filipkin.com -> 127.0.0.1:8771)
@@ -38,9 +38,7 @@ services:
     command: ["bun", "run", "src/experiment/main.ts"]
     env_file: .env
     volumes:
-      - stonkbot-data:/app/data
+      - /data/stonkbot:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-volumes:
-  stonkbot-data:
