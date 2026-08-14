@@ -10,7 +10,7 @@ import { loadState, loadSignals } from "./state";
 import { loadEquityHistory, loadBenchmarkHistory, loadTrades } from "./db";
 import { getAccount, getPositions, getLatestPrice, getClock, type Position } from "./alpaca";
 import type { Signal } from "./strategy";
-import { renderExperiment } from "./experiment/dashboard";
+import { renderExperiment, renderArmDetail, armExists } from "./experiment/dashboard";
 
 function page(html: string): Response {
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8" } });
@@ -628,6 +628,19 @@ async function experimentCached(sort: ExpSort): Promise<string> {
   expCache.set(sort, { html, at: now });
   return html;
 }
+
+// One arm's live-bot-style detail page. Keyed by arm id; reads SQLite + the same
+// single shared SCHD price, so it gets the same short cache as the arena page to
+// keep public views from multiplying that benchmark call.
+const armCache = new Map<number, { html: string; at: number }>();
+async function armDetailCached(id: number): Promise<string> {
+  const now = Date.now();
+  const hit = armCache.get(id);
+  if (hit && now - hit.at < CACHE_MS) return hit.html;
+  const html = await renderArmDetail(id);
+  armCache.set(id, { html, at: now });
+  return html;
+}
 // #endregion
 
 const server = Bun.serve({
@@ -644,6 +657,20 @@ const server = Bun.serve({
         return Response.json(await stateCached(), { headers: cors });
       } catch (err) {
         return Response.json({ error: String(err instanceof Error ? err.message : err) }, { status: 502, headers: cors });
+      }
+    }
+    if (pathname === "/experiment/arm") {
+      try {
+        const id = Number(searchParams.get("id"));
+        // Reject non-arms BEFORE the cache write: the endpoint is public and
+        // enumerable, so caching arbitrary ids would grow armCache without bound.
+        if (!Number.isInteger(id) || id <= 0 || !armExists(id)) {
+          return new Response("no such arm", { status: 404 });
+        }
+        return page(await armDetailCached(id));
+      } catch (err) {
+        return page(`<body style="background:#0a0b0d;color:#ea3943;font-family:system-ui;padding:2rem">
+          <h1>arm view hiccup 🫠</h1><pre>${esc(String(err instanceof Error ? err.stack ?? err.message : err))}</pre></body>`);
       }
     }
     if (pathname === "/experiment") {
