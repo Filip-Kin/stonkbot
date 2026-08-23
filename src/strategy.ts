@@ -85,7 +85,7 @@ export async function evaluateSymbol(
   // bounce would otherwise realize a LOSS on a name still below our cost basis
   // (which is what dumped LLY/AMZN underwater). Losers are left to the -2%
   // stop-loss; this keeps the two exits doing distinct jobs.
-  if (holding && intradayRsi >= s.rsiOverbought) {
+  if (holding && s.momentumExit && intradayRsi >= s.rsiOverbought) {
     if ((heldPnlPct ?? 0) > 0) {
       return {
         symbol,

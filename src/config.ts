@@ -70,8 +70,15 @@ export const config = {
     maxPositionFraction: 0.12,
     // Hard stop-loss per position. Sold at market if breached.
     stopLossFraction: 0.02,
-    // Take-profit target per position.
-    takeProfitFraction: 0.04,
+    // Take-profit target per position. null = no fixed target. The live model is
+    // now the "Anti-Asymmetry" exit set (the experiment's arm 32): keep the tight
+    // stop, drop the tiny-win scalp, and let a trailing stop harvest the full
+    // up-move instead. Set a fraction here (e.g. 0.04) to restore a flat target.
+    takeProfitFraction: null as number | null,
+    // Trailing stop: once a position has gone green, exit if it gives back this
+    // fraction from its high-water mark. null = disabled. Needs per-position peak
+    // tracking (state.highWater in index.ts), since Alpaca positions carry no peak.
+    trailingStopFraction: 0.04 as number | null,
     // If the account's realised+unrealised loss for the day hits this fraction
     // of the day's opening equity, halt all new buys until tomorrow.
     dailyLossCapFraction: 0.06,
@@ -139,6 +146,11 @@ export const config = {
     rsiPeriod: 14,
     rsiOversold: 35,
     rsiOverbought: 65,
+    // RSI momentum exit ("sell into strength"). Disabled under the Anti-Asymmetry
+    // model: the trailing stop now harvests up-moves instead of an RSI pop cutting
+    // a winner early (the exit-asymmetry the experiment set out to fix).
+    // rsiOverbought is kept above purely for the dashboard RSI meter colouring.
+    momentumExit: false as boolean,
     smaPeriod: 20,
     // Only buy dips when the longer trend is up: price above this daily SMA.
     trendSmaPeriodDays: 50,

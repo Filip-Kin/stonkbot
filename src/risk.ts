@@ -10,14 +10,36 @@ export interface RiskContext {
   state: BotState;
 }
 
-// Forced exits that override any strategy signal: stop-loss and take-profit.
-export function forcedExits(positions: Position[]): { symbol: string; reason: string }[] {
+// Forced exits that override any strategy signal: hard stop-loss, an optional
+// fixed take-profit, and an optional trailing stop. Order mirrors the
+// experiment's sim.ts mechanicalExit: cut losers first, then a fixed target,
+// then give-back on the trail. `highWater` is the per-symbol peak price since
+// entry (index.ts maintains it in BotState, since Alpaca positions carry no
+// peak); the trail only arms once a position has gone green.
+export function forcedExits(
+  positions: Position[],
+  highWater: Record<string, number> = {},
+): { symbol: string; reason: string }[] {
   const out: { symbol: string; reason: string }[] = [];
+  const { stopLossFraction, takeProfitFraction, trailingStopFraction } = config.risk;
   for (const p of positions) {
-    if (p.unrealized_plpc <= -config.risk.stopLossFraction) {
+    // 1) Hard stop-loss: cut a loser no matter what.
+    if (p.unrealized_plpc <= -stopLossFraction) {
       out.push({ symbol: p.symbol, reason: `stop-loss hit (${(p.unrealized_plpc * 100).toFixed(1)}%)` });
-    } else if (p.unrealized_plpc >= config.risk.takeProfitFraction) {
+      continue;
+    }
+    // 2) Fixed take-profit, when configured (null under the Anti-Asymmetry model).
+    if (takeProfitFraction !== null && p.unrealized_plpc >= takeProfitFraction) {
       out.push({ symbol: p.symbol, reason: `take-profit hit (${(p.unrealized_plpc * 100).toFixed(1)}%)` });
+      continue;
+    }
+    // 3) Trailing stop: only once green (high-water above entry), exit if price
+    //    has given back the trail width from the peak.
+    if (trailingStopFraction !== null) {
+      const hw = highWater[p.symbol];
+      if (hw !== undefined && hw > p.avg_entry_price && p.current_price <= hw * (1 - trailingStopFraction)) {
+        out.push({ symbol: p.symbol, reason: `trailing stop (${(p.unrealized_plpc * 100).toFixed(1)}%)` });
+      }
     }
   }
   return out;

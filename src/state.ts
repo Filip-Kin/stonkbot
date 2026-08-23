@@ -26,6 +26,10 @@ export interface BotState {
   // The trading day whose close summary has already been sent, so the summary
   // fires exactly once after the market closes (not on every closed cycle).
   closeSummarySentDay: string;
+  // Per-symbol high-water mark (peak price seen since entry) for the trailing
+  // stop. Alpaca positions carry no peak, so the bot tracks it here: ratcheted
+  // up each cycle for held names, pruned when a position closes.
+  highWater: Record<string, number>;
 }
 
 const DEFAULT_STATE: BotState = {
@@ -38,6 +42,7 @@ const DEFAULT_STATE: BotState = {
   sellsToday: 0,
   realizedPlToday: 0,
   closeSummarySentDay: "",
+  highWater: {},
 };
 
 export async function loadState(): Promise<BotState> {

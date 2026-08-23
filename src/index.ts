@@ -103,8 +103,21 @@ async function runCycle(now: Date): Promise<void> {
     }
   }
 
-  // 1) Forced risk exits first (stop-loss / take-profit).
-  for (const exit of forcedExits(positions)) {
+  // Maintain per-symbol high-water marks for the trailing stop. Anchor at the
+  // entry price so the trail never arms below cost, then ratchet up with the
+  // current price. Prune marks for names we no longer hold, so the map can't
+  // grow unbounded and a re-entry starts a fresh trail.
+  const heldSyms = new Set(positions.map((p) => p.symbol));
+  for (const sym of Object.keys(state.highWater)) {
+    if (!heldSyms.has(sym)) delete state.highWater[sym];
+  }
+  for (const p of positions) {
+    const prevPeak = state.highWater[p.symbol] ?? p.avg_entry_price;
+    state.highWater[p.symbol] = Math.max(prevPeak, p.current_price);
+  }
+
+  // 1) Forced risk exits first (hard stop-loss, take-profit, trailing stop).
+  for (const exit of forcedExits(positions, state.highWater)) {
     console.log(`[exit] ${exit.symbol}: ${exit.reason}`);
     await closePosition(exit.symbol);
     const pos = positions.find((p) => p.symbol === exit.symbol);
