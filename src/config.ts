@@ -71,14 +71,15 @@ export const config = {
     // Hard stop-loss per position. Sold at market if breached.
     stopLossFraction: 0.02,
     // Take-profit target per position. null = no fixed target. The live model is
-    // now the "Anti-Asymmetry" exit set (the experiment's arm 32): keep the tight
-    // stop, drop the tiny-win scalp, and let a trailing stop harvest the full
-    // up-move instead. Set a fraction here (e.g. 0.04) to restore a flat target.
-    takeProfitFraction: null as number | null,
+    // the experiment's arm 6: the baseline exit set with the RSI momentum exit
+    // moved from 65 to 75. Arm 6 had the highest per-trade margin of any arm
+    // with a real sample (break-even slippage 7.9 bps/side vs the Control's 3.2)
+    // and closed 32% fewer round trips. See Arena_Analysis/REPORT.md.
+    takeProfitFraction: 0.04 as number | null,
     // Trailing stop: once a position has gone green, exit if it gives back this
     // fraction from its high-water mark. null = disabled. Needs per-position peak
     // tracking (state.highWater in index.ts), since Alpaca positions carry no peak.
-    trailingStopFraction: 0.04 as number | null,
+    trailingStopFraction: null as number | null,
     // If the account's realised+unrealised loss for the day hits this fraction
     // of the day's opening equity, halt all new buys until tomorrow.
     dailyLossCapFraction: 0.06,
@@ -145,12 +146,14 @@ export const config = {
     lookbackBars: 60, // ~5 hours of 5-min bars
     rsiPeriod: 14,
     rsiOversold: 35,
-    rsiOverbought: 65,
-    // RSI momentum exit ("sell into strength"). Disabled under the Anti-Asymmetry
-    // model: the trailing stop now harvests up-moves instead of an RSI pop cutting
-    // a winner early (the exit-asymmetry the experiment set out to fix).
-    // rsiOverbought is kept above purely for the dashboard RSI meter colouring.
-    momentumExit: false as boolean,
+    // 75, not 65: the Arena's arm 6. A later momentum exit stops the RSI pop
+    // knifing a winner at ~+0.3% while still closing the trade, which is what
+    // the no-exit arms (7/8/32) failed to do often enough to measure.
+    rsiOverbought: 75,
+    // RSI momentum exit ("sell into strength"). ON under the arm 6 model, paired
+    // with the flat 4% take-profit and no trailing stop. The breakeven gate in
+    // strategy.ts still stops it firing while the position is underwater.
+    momentumExit: true as boolean,
     smaPeriod: 20,
     // Only buy dips when the longer trend is up: price above this daily SMA.
     trendSmaPeriodDays: 50,
