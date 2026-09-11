@@ -104,6 +104,22 @@ export const config = {
     // exits (stop-loss / take-profit) are NEVER gated by this, so a tanking
     // position is still cut immediately. Tune via MIN_HOLD_MINUTES.
     minHoldMinutes: Number(env("MIN_HOLD_MINUTES", "90")),
+
+    // #region pattern-day-trader rail
+    // FINRA 4210: 4+ day trades (open and close in the same session) inside 5
+    // rolling business days flags a margin account as a pattern day trader,
+    // which then needs $25,000 or the broker restricts it. Alpaca offers NO
+    // cash accounts - every account is margin, and one under $2,000 is just
+    // "limited margin" at 1x - so the $200 book gets three day trades per five
+    // sessions. See daytrades.ts for how the rail spends them.
+    pdtGuard: env("PDT_GUARD", "true") === "true",
+    maxDayTradesPer5Days: Number(env("MAX_DAY_TRADES", "3")),
+    // Day trades held back so a discretionary momentum exit can never spend the
+    // last one and leave a loser that cannot be stopped out the same session.
+    dayTradeStopReserve: Number(env("DAY_TRADE_STOP_RESERVE", "1")),
+    // Above this equity PDT stops applying and the rail switches itself off.
+    pdtEquityFloor: 25000,
+    // #endregion
   },
   // #endregion
 

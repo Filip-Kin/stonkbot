@@ -119,6 +119,24 @@ export function db(): Database {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    -- #region pattern-day-trader ledger
+    -- Which trading session each currently-held symbol was opened in. Closing a
+    -- position in the same session it was opened is a day trade (FINRA 4210),
+    -- and Alpaca has no cash accounts, so this binds on any book under $25,000.
+    CREATE TABLE IF NOT EXISTS position_opens (
+      symbol TEXT PRIMARY KEY,
+      opened_day TEXT NOT NULL,
+      opened_at TEXT NOT NULL
+    );
+    -- One row per day trade actually taken, for the rolling 5-session count.
+    CREATE TABLE IF NOT EXISTS day_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      symbol TEXT NOT NULL,
+      trading_day TEXT NOT NULL,
+      recorded_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_day_trades_day ON day_trades (trading_day);
+    -- #endregion
     -- #region experiment (multi-arm) tables
     -- Registry of the arms and their params (for the dashboard + reproducibility).
     CREATE TABLE IF NOT EXISTS arms (

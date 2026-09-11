@@ -263,8 +263,15 @@ function renderChart(): string {
   // Equity is sampled only during regular trading hours; clip the benchmark to
   // the same window so a couple of sparse pre/post-market bars (from the historical
   // backfill) don't fragment the one overnight gap into several stair-steps.
+  // benchmark_history is shared with the Arena page and reaches back further than
+  // the live book does after an account reset. Both series rebase to their own
+  // first point, so clip the benchmark to the bot's own start or SCHD would be
+  // measured from a date the bot never traded.
+  const botFirst = eq.find((p) => inRegularHours(p.t))?.t ?? "";
   const botSeries = rebase(eq.filter((p) => inRegularHours(p.t)).map((p) => ({ t: p.t, v: p.equity })));
-  const benchSeries = rebase(bench.filter((p) => inRegularHours(p.t)).map((p) => ({ t: p.t, v: p.price })));
+  const benchSeries = rebase(
+    bench.filter((p) => inRegularHours(p.t) && p.t >= botFirst).map((p) => ({ t: p.t, v: p.price })),
+  );
   if (botSeries.length < 2) return `<p class="muted" style="margin-top:1rem">📊 Chart populates as equity samples accrue…</p>`;
 
   const W = 1120, H = 230, padL = 8, padR = 8, padT = 14, padB = 18;

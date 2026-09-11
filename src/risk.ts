@@ -8,6 +8,10 @@ export interface RiskContext {
   account: Account;
   positions: Position[];
   state: BotState;
+  // Set when the pattern-day-trader rail has spent its budget: no new entries,
+  // because an entry is the only thing that can create another day trade.
+  // See daytrades.ts.
+  entriesBlocked?: boolean;
 }
 
 // Forced exits that override any strategy signal: hard stop-loss, an optional
@@ -59,12 +63,18 @@ export function allowedBuyUsd(ctx: RiskContext): number {
   if (!config.tradingEnabled) return 0;
   if (ctx.state.haltedForDay) return 0;
   if (dailyLossBreached(ctx)) return 0;
+  if (ctx.entriesBlocked) return 0;
   if (ctx.positions.length >= r.maxOpenPositions) return 0;
 
   const equity = ctx.account.equity;
   const perPositionCap = equity * r.maxPositionFraction;
   const investableCash = ctx.account.cash - equity * r.cashBufferFraction;
-  const budget = Math.min(perPositionCap, investableCash);
+  // Settled dollars only. Alpaca fronts the float between trade and settlement,
+  // but spending money that is still unsettled is how a small book racks up
+  // good-faith violations, so the rail spends `non_marginable_buying_power`
+  // (which sale proceeds only enter after T+1) when it is the tighter number.
+  const settled = ctx.account.non_marginable_buying_power;
+  const budget = Math.min(perPositionCap, investableCash, settled);
 
   if (budget < r.minOrderUsd) return 0;
   return Math.floor(budget * 100) / 100;
