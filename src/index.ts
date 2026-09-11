@@ -9,7 +9,8 @@ import {
 import { evaluateSymbol } from "./strategy";
 import { getHeadlines, getNewsSentiments } from "./news";
 import {
-  forcedExits, allowedBuyUsd, alreadyHolding, dailyLossBreached, sectorAtCap, type RiskContext,
+  forcedExits, allowedBuyUsd, alreadyHolding, dailyLossBreached, sectorAtCap,
+  effectiveMinOrderUsd, type RiskContext,
 } from "./risk";
 import {
   loadState, saveState, rollDayIfNeeded, saveSignals, loadNewsCache, saveNewsCache,
@@ -259,7 +260,7 @@ async function runCycle(now: Date): Promise<void> {
     // long can never lose more than the cash placed in it. Uses cash, never
     // the 4x margin buying power.
     const spend = Math.min(budget, simCash);
-    if (spend < config.risk.minOrderUsd) break;
+    if (spend < effectiveMinOrderUsd(account.equity)) break;
 
     console.log(`[buy] ${pick.symbol} $${spend.toFixed(2)}: ${pick.reason}`);
     await submitBuy({ symbol: pick.symbol, notional: spend, type: "market" });

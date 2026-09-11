@@ -6,11 +6,12 @@
 // Runs against a throwaway DB via STONKBOT_DATA_DIR.
 import { test, expect, beforeAll } from "bun:test";
 
-process.env.STONKBOT_DATA_DIR = "/tmp/stonkbot-daytrades-test";
+// The scratch data dir is set by src/test-setup.ts (bunfig.toml preload), which
+// has to run before db.ts memoises its handle.
 process.env.PDT_GUARD = "true";
 
-const { db } = await import("./db");
-const dt = await import("./daytrades");
+import { db } from "./db";
+import * as dt from "./daytrades";
 import type { Account, Position } from "./alpaca";
 
 const TODAY = "2026-09-11";

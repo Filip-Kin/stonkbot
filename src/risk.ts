@@ -56,6 +56,18 @@ export function dailyLossBreached(ctx: RiskContext): boolean {
   return drawdown >= config.risk.dailyLossCapFraction;
 }
 
+// The smallest buy worth placing on THIS book. A flat dollar floor is wrong for
+// a small account: at $150 of equity a full-size 12% position is $18, so a flat
+// $20 floor would reject every possible buy and the bot would sit in cash
+// forever. The floor therefore scales with the per-position cap and only bites
+// as an absolute number once the book is large enough for that to be the
+// tighter constraint.
+export function effectiveMinOrderUsd(equity: number): number {
+  const r = config.risk;
+  const perPositionCap = equity * r.maxPositionFraction;
+  return Math.max(r.absoluteMinOrderUsd, Math.min(r.minOrderUsd, perPositionCap * r.minOrderFractionOfCap));
+}
+
 // How much can we spend on a NEW position right now, respecting per-position
 // cap, cash buffer, and max open positions? Returns 0 if a buy isn't allowed.
 export function allowedBuyUsd(ctx: RiskContext): number {
@@ -76,7 +88,7 @@ export function allowedBuyUsd(ctx: RiskContext): number {
   const settled = ctx.account.non_marginable_buying_power;
   const budget = Math.min(perPositionCap, investableCash, settled);
 
-  if (budget < r.minOrderUsd) return 0;
+  if (budget < effectiveMinOrderUsd(equity)) return 0;
   return Math.floor(budget * 100) / 100;
 }
 

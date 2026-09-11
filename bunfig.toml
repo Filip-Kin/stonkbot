@@ -1,0 +1,4 @@
+[test]
+# Redirects the SQLite path to a scratch dir before any module opens the real
+# one. Without it, test order decides which database the suite writes to.
+preload = ["./src/test-setup.ts"]

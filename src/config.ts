@@ -91,8 +91,20 @@ export const config = {
     // Max concurrent open positions within a single sector (avoids clustering
     // e.g. three pharma names on a sector-wide dip). See config.sectors.
     maxPerSector: 2,
-    // Minimum order size in dollars (avoid dust trades eaten by spread).
+    // Minimum order size in dollars (avoid dust trades eaten by spread). Held
+    // flat this used to freeze the bot outright below ~$167 of equity: a 12%
+    // position was then worth less than the floor, allowedBuyUsd returned 0, and
+    // nothing could ever be bought again. The floor now scales down with the
+    // book (see effectiveMinOrderUsd in risk.ts), so a shrinking account trades
+    // smaller instead of stopping. On a book big enough for a full-size position
+    // to clear it, this flat number still applies unchanged.
     minOrderUsd: 20,
+    // The scaled floor: a buy must be able to fill at least this share of one
+    // full-size position. Below that it is dust relative to the book.
+    minOrderFractionOfCap: 0.8,
+    // Alpaca will not fill a fractional notional order under a dollar, so the
+    // scaled floor never goes below this.
+    absoluteMinOrderUsd: 1,
     // Max NEW buys opened in a single cycle. Sells/exits are never capped. Each
     // fill re-checks every rail (budget, cash buffer, sector cap, max positions)
     // against the simulated post-buy book, so this only lets the bot fill more
