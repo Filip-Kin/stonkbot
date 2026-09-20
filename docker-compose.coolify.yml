@@ -32,13 +32,21 @@ services:
     ports:
       - "127.0.0.1:8771:8771"
 
-  experiment:
-    build: .
-    restart: unless-stopped
-    command: ["bun", "run", "src/experiment/main.ts"]
-    env_file: .env
-    volumes:
-      - /data/stonkbot:/app/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
+# The `experiment` service is deliberately gone. The 40-arm Arena ended 2026-09-11
+# (0/40 beat SCHD or the Control on a 95% bootstrap band; in-sample rank told you
+# nothing about out-of-sample). Its record is frozen in the arm_* tables and still
+# renders at /experiment, and the full analysis lives in Nextcloud Arena_Analysis/.
+#
+# It was stopped with `docker stop` four times and came back every deploy, because
+# Coolify recreates the whole compose. Removing the service is the only thing that
+# actually keeps it down. To run another experiment, restore this block from git:
+#
+#   experiment:
+#     build: .
+#     restart: unless-stopped
+#     command: ["bun", "run", "src/experiment/main.ts"]
+#     env_file: .env
+#     volumes:
+#       - /data/stonkbot:/app/data
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
