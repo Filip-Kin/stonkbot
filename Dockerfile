@@ -9,6 +9,9 @@ RUN bun install
 
 COPY tsconfig.json ./
 COPY src ./src
+# Static files the dashboard serves directly. Currently the frozen Arena report:
+# the experiment is gone, so /arena.pdf is a file read, not a database render.
+COPY public ./public
 
 # Persisted state (equity history, day tracking) lives here; mounted as a volume.
 RUN mkdir -p /app/data

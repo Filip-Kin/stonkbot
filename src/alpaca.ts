@@ -59,12 +59,6 @@ function tradingHeaders(): HeadersInit {
 // kills the request at idleTimeout → blank page) and can stall the bot cycle.
 // Cap every Alpaca call so a slow upstream fails fast and degrades gracefully.
 const ALPACA_TIMEOUT_MS = 8000;
-// The experiment's batched multi-symbol pulls (130-symbol union, paginated 5Min
-// bars = tens of thousands of rows/page) are far heavier than the bot's
-// single-symbol calls, so 8s trips on transient IEX slowness. Give batch reads a
-// generous per-page cap plus a retry (see fetchWithRetry) so a blip no longer
-// kills the whole cycle.
-const ALPACA_BATCH_TIMEOUT_MS = 20000;
 const BATCH_RETRIES = 2;
 
 async function trading<T>(path: string, init?: RequestInit): Promise<T> {
@@ -90,24 +84,6 @@ async function data<T>(path: string, timeoutMs: number = ALPACA_TIMEOUT_MS): Pro
     throw new Error(`Alpaca data ${path} ${res.status}: ${body}`);
   }
   return (await res.json()) as T;
-}
-
-// Retry a data() read on a transient AbortSignal timeout. Only TimeoutError is
-// retried (a 4xx/5xx from Alpaca surfaces immediately); short linear backoff.
-function isTimeout(err: unknown): boolean {
-  return err instanceof DOMException && err.name === "TimeoutError";
-}
-
-async function dataWithRetry<T>(path: string, timeoutMs: number, retries: number): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await data<T>(path, timeoutMs);
-    } catch (err) {
-      if (attempt >= retries || !isTimeout(err)) throw err;
-      console.warn(`[alpaca] batch read timed out (attempt ${attempt + 1}/${retries + 1}), retrying`);
-      await Bun.sleep(500 * (attempt + 1));
-    }
-  }
 }
 
 // #region raw response coercion
@@ -226,63 +202,4 @@ export async function getLatestPrice(symbol: string): Promise<number | null> {
   return resp.trade?.p ?? null;
 }
 
-// #region batched market data (for the multi-arm experiment)
-// The single-symbol getBars/getLatestPrice above cost one HTTP call per symbol.
-// The experiment evaluates a whole universe (up to ~100 names) every cycle, so
-// it uses Alpaca's multi-symbol endpoints instead: one call per timeframe for
-// the entire watchlist rather than one per symbol. This keeps the data budget
-// O(symbols) shared across ALL arms instead of O(symbols x arms). The live bot
-// keeps using the single-symbol variants.
-
-// Batched bars: /v2/stocks/bars?symbols=AAPL,MSFT,... returns a symbol-keyed map.
-// Pages via next_page_token so a large universe isn't silently truncated.
-export async function getBarsBatch(
-  symbols: string[],
-  timeframe: string,
-  limit: number,
-  start: string,
-): Promise<Record<string, Bar[]>> {
-  const out: Record<string, Bar[]> = {};
-  if (symbols.length === 0) return out;
-  let pageToken: string | undefined;
-  do {
-    const params = new URLSearchParams({
-      symbols: symbols.join(","),
-      timeframe,
-      limit: String(limit),
-      start,
-      adjustment: "raw",
-      feed: "iex",
-    });
-    if (pageToken) params.set("page_token", pageToken);
-    const resp = await dataWithRetry<{ bars: Record<string, Bar[]> | null; next_page_token: string | null }>(
-      `/v2/stocks/bars?${params.toString()}`,
-      ALPACA_BATCH_TIMEOUT_MS,
-      BATCH_RETRIES,
-    );
-    for (const [sym, bars] of Object.entries(resp.bars ?? {})) {
-      (out[sym] ??= []).push(...bars);
-    }
-    pageToken = resp.next_page_token ?? undefined;
-  } while (pageToken);
-  return out;
-}
-
-// Batched latest trade prices: /v2/stocks/trades/latest?symbols=... returns a
-// symbol-keyed map of the most recent trade. Returns symbol -> price.
-export async function getLatestPricesBatch(symbols: string[]): Promise<Record<string, number>> {
-  const out: Record<string, number> = {};
-  if (symbols.length === 0) return out;
-  const params = new URLSearchParams({ symbols: symbols.join(","), feed: "iex" });
-  const resp = await dataWithRetry<{ trades?: Record<string, { p: number }> }>(
-    `/v2/stocks/trades/latest?${params.toString()}`,
-    ALPACA_BATCH_TIMEOUT_MS,
-    BATCH_RETRIES,
-  );
-  for (const [sym, trade] of Object.entries(resp.trades ?? {})) {
-    if (trade && typeof trade.p === "number") out[sym] = trade.p;
-  }
-  return out;
-}
-// #endregion
 // #endregion

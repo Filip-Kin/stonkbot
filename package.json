@@ -10,7 +10,6 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dashboard": "bun run src/dashboard.ts",
-    "experiment": "bun run src/experiment/main.ts",
     "once": "bun run src/index.ts --once",
     "typecheck": "bunx tsc --noEmit"
   },
