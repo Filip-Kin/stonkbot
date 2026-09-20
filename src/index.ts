@@ -23,9 +23,10 @@ import {
 import { getBars } from "./alpaca";
 import { notify, setNotifyEnabled } from "./notify";
 import {
-  syncOpens, dayTradeStatus, mayExit, mayOpen, recordOpen, recordClose, usTradingDay,
+  syncOpens, dayTradeStatus, mayExit, mayOpen, recordOpen, recordClose,
   type DayTradeStatus,
 } from "./daytrades";
+import { usTradingDay, minutesSinceOpen } from "./market-clock";
 
 // Stable signature of a headline set, so the AI sentiment only re-runs when the
 // headlines actually change (djb2 hash, dependency-free).
@@ -105,7 +106,20 @@ async function runCycle(now: Date): Promise<void> {
     if (benchNow) appendBenchmark({ t: now.toISOString(), price: benchNow });
   } catch { /* benchmark sample is observability-only */ }
 
-  const ctx: RiskContext = { account, positions, state, entriesBlocked: !mayOpen(dt).allowed };
+  // Indicator warm-up. Until the intraday window holds real bars from THIS
+  // session, entries and the discretionary momentum exit are both suppressed:
+  // both read RSI/SMA20, and both can be faked by an overnight gap. The forced
+  // exits below run regardless - a stop-loss must be live from the first print.
+  const sinceOpen = minutesSinceOpen(now);
+  const indicatorsWarm = sinceOpen >= config.strategy.openDelayMinutes;
+  if (!indicatorsWarm) {
+    console.log(`[open] ${sinceOpen}m since open, indicators warm at ${config.strategy.openDelayMinutes}m — risk exits only`);
+  }
+
+  const ctx: RiskContext = {
+    account, positions, state,
+    entriesBlocked: !mayOpen(dt).allowed || !indicatorsWarm,
+  };
 
   // 0) SHORT SAFETY SWEEP. A short position has unbounded downside and is the
   // only way to lose more than you invested. We never open one, but if the
@@ -218,6 +232,10 @@ async function runCycle(now: Date): Promise<void> {
   // Strategy-driven sells (momentum exits).
   for (const sig of signals) {
     if (sig.action === "sell" && alreadyHolding(positions, sig.symbol)) {
+      if (!indicatorsWarm) {
+        console.log(`[open] holding ${sig.symbol}: momentum exit suppressed until indicators warm`);
+        continue;
+      }
       const gate = mayExit(sig.symbol, day, "discretionary", dt);
       if (!gate.allowed) {
         console.log(`[pdt] deferring ${sig.symbol} momentum exit: ${gate.reason}`);
@@ -390,5 +408,8 @@ async function main(): Promise<void> {
   } while (!once);
 }
 
-main();
+// Only when run as the entrypoint. Without this guard, importing anything from
+// this file starts the trading loop - which is how a unit test came within one
+// market open of placing live orders.
+if (import.meta.main) main();
 // #endregion

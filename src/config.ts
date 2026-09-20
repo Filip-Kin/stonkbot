@@ -191,6 +191,14 @@ export const config = {
     // If a dip coincides with this many fresh headlines in 24h, treat it as a
     // news catalyst and skip (avoid catching a knife falling on bad news).
     newsCatalystThreshold: 3,
+    // Minutes after the 09:30 ET open before indicator-driven decisions are
+    // allowed. lookbackBars is 60 five-minute bars, so for the first part of a
+    // session RSI and SMA20 are computed almost entirely from YESTERDAY's bars:
+    // an overnight gap alone can manufacture a "below SMA20, RSI oversold" entry
+    // or an "RSI overbought" exit that no intraday move justifies. Hard stops and
+    // take-profits are NOT gated by this - they read position P&L, not
+    // indicators, so a gap cannot fake them and they must stay live from 09:30.
+    openDelayMinutes: Number(env("OPEN_DELAY_MINUTES", "30")),
   },
 } as const;
 

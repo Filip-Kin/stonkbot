@@ -6,7 +6,8 @@
 // gates + a five-level news read and recent headlines), and the closed-trade
 // log with the reason each position was sold.
 import { config } from "./config";
-import { dayTradeStatus, usTradingDay, type DayTradeStatus } from "./daytrades";
+import { dayTradeStatus, type DayTradeStatus } from "./daytrades";
+import { usTradingDay } from "./market-clock";
 import { loadState, loadSignals } from "./state";
 import { loadEquityHistory, loadBenchmarkHistory, loadTrades } from "./db";
 import { getAccount, getPositions, getLatestPrice, getClock, type Position } from "./alpaca";
