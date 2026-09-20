@@ -6,6 +6,7 @@
 // gates + a five-level news read and recent headlines), and the closed-trade
 // log with the reason each position was sold.
 import { config } from "./config";
+import { dayTradeStatus, usTradingDay, type DayTradeStatus } from "./daytrades";
 import { loadState, loadSignals } from "./state";
 import { loadEquityHistory, loadBenchmarkHistory, loadTrades } from "./db";
 import { getAccount, getPositions, getLatestPrice, getClock, type Position } from "./alpaca";
@@ -75,10 +76,14 @@ async function render(): Promise<string> {
     ? ((benchNow - state.benchmarkInceptionPrice) / state.benchmarkInceptionPrice) * 100 : null;
   const edge = botReturn !== null && benchReturn !== null ? botReturn - benchReturn : null;
 
+  // Day-trade budget. Read-only here: syncOpens belongs to the bot process, which
+  // owns the ledger. Null when the account call failed, so the tile just hides.
+  const dayTrades = acct ? dayTradeStatus(acct, usTradingDay(new Date())) : null;
+
   const marketStatus = renderMarketStatus(clock);
   const scoreboard = renderScoreboard(botReturn, benchReturn, edge);
   const chart = renderChart();
-  const tiles = renderTiles({ equity, cash, positions });
+  const tiles = renderTiles({ equity, cash, positions, dayTrades });
   const holdings = renderHoldings(positions);
   const watchlist = await renderWatchlist(posMap);
   const trades = renderTrades();
@@ -197,7 +202,7 @@ async function render(): Promise<string> {
     <div class="topbar">
       <h1>🚀 stonkbot <span class="badge">${config.mode === "live" ? "💵 real money" : "🎩 monopoly money"}</span></h1>
       <div style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
-        <a class="pill" href="/experiment" style="color:var(--violet);border-color:rgba(169,123,255,.4)">⚔️ arena · 40 bots</a>
+        <a class="pill" href="/experiment" style="color:var(--violet);border-color:rgba(169,123,255,.4)">⚔️ arena · final results</a>
         ${marketStatus}
       </div>
     </div>
@@ -222,7 +227,7 @@ async function render(): Promise<string> {
     ${trades}
 
     <div class="foot">
-      Auto-refreshes every 60s · ${eqCount} equity samples on record · paper trading, <b>not financial advice</b>,
+      Auto-refreshes every 60s · ${eqCount} equity samples on record · ${config.mode === "live" ? "real money" : "paper trading"}, <b>not financial advice</b>,
       this bot has diamond hands and reads the news so you don't have to. 🦆
     </div>
   </div></body></html>`;
@@ -368,7 +373,9 @@ function rebase(pts: { t: string; v: number }[]): { t: number; r: number }[] {
 // #endregion
 
 // #region KPI tiles
-function renderTiles(o: { equity: number; cash: number; positions: Position[] }): string {
+function renderTiles(
+  o: { equity: number; cash: number; positions: Position[]; dayTrades: DayTradeStatus | null },
+): string {
   const trades = loadTrades();
   const realized = trades.reduce((a, t) => a + t.realizedPl, 0);
   const wins = trades.filter((t) => t.realizedPl >= 0).length;
@@ -382,7 +389,21 @@ function renderTiles(o: { equity: number; cash: number; positions: Position[] })
   const tile = (k: string, v: string, s: string, cls = "") =>
     `<div class="card tile"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
 
+  // The day-trade budget only exists below the $25k PDT line, so the tile only
+  // exists there too. It is the binding constraint on a small book: when it hits
+  // zero the bot stops opening positions entirely.
+  const dt = o.dayTrades;
+  const dtTile = dt?.applies
+    ? tile(
+        "⚖️ Day trades",
+        `${dt.used}<span class="s" style="font-weight:400"> / ${dt.max}</span>`,
+        dt.remaining === 0 ? "<span class='down'>budget spent · no new entries</span>" : "5-session window",
+        dt.remaining === 0 ? "down" : "",
+      )
+    : "";
+
   return [
+    dtTile,
     tile("💰 Realized P/L", `<span class="${pctCls(realized)}">${signed(realized)}$</span>`.replace("$", ""), `${trades.length} trades closed`),
     tile("🎯 Win rate", `${winRate.toFixed(0)}%`, `${wins}W / ${losses}L`, winRate >= 50 ? "up" : "down"),
     tile("📊 Open positions", `${o.positions.length}<span class="s" style="font-weight:400"> / ${config.risk.maxOpenPositions}</span>`, `unreal <span class="${pctCls(openUnreal)}">${signed(openUnreal)}</span>`),

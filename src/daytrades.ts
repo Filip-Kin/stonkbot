@@ -26,6 +26,15 @@ import type { Account, Position } from "./alpaca";
 
 export type ExitKind = "stop" | "discretionary";
 
+// The US/Eastern trading day, e.g. "2026-09-21". A day trade is an open and a
+// close inside one of these, so every caller must agree on where the boundary
+// falls - hence one definition, shared by the bot and the dashboard.
+export function usTradingDay(now: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now);
+}
+
 // #region ledger
 // Stamp a newly opened position with the session it was opened in.
 export function recordOpen(symbol: string, tradingDay: string, nowIso: string): void {

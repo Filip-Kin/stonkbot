@@ -23,16 +23,9 @@ import {
 import { getBars } from "./alpaca";
 import { notify, setNotifyEnabled } from "./notify";
 import {
-  syncOpens, dayTradeStatus, mayExit, mayOpen, recordOpen, recordClose,
+  syncOpens, dayTradeStatus, mayExit, mayOpen, recordOpen, recordClose, usTradingDay,
   type DayTradeStatus,
 } from "./daytrades";
-
-// US/Eastern trading-day string, e.g. "2026-08-08".
-function usTradingDay(now: Date): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
-  }).format(now);
-}
 
 // Stable signature of a headline set, so the AI sentiment only re-runs when the
 // headlines actually change (djb2 hash, dependency-free).
