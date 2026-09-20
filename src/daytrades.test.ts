@@ -17,7 +17,7 @@ import type { Account, Position } from "./alpaca";
 const TODAY = "2026-09-11";
 const YESTERDAY = "2026-09-10";
 const acct = (over: Partial<Account> = {}): Account => ({
-  equity: 200, cash: 200, buying_power: 200, non_marginable_buying_power: 200, ...over,
+  equity: 200, cash: 200, buying_power: 200, ...over,
 });
 const pos = (symbol: string): Position => ({
   symbol, qty: 1, avg_entry_price: 1, current_price: 1,

@@ -84,7 +84,7 @@ DEP=$(curl -fsS -X POST "$PANEL/deploy" -H "$AUTH" -H 'content-type: application
   -d "{\"uuid\":\"$APP_UUID\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["deployments"][0]["deployment_uuid"])')
 for _ in $(seq 1 60); do
   ST=$(curl -fsS "$PANEL/deployments/$DEP" -H "$AUTH" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("status"))')
-  [ "$ST" = finished ] || [ "$ST" = failed ] && break
+  if [ "$ST" = finished ] || [ "$ST" = failed ]; then break; fi
   sleep 10
 done
 echo "    deployment $ST"
@@ -93,7 +93,8 @@ echo "    deployment $ST"
 sleep 15
 # The Arena is over. A redeploy recreates its container from the compose file, so
 # stop it again until the service is removed from docker-compose.coolify.yml.
-EXP=$(docker ps -q --filter "name=experiment-$APP_UUID") && [ -n "$EXP" ] && docker stop "$EXP" >/dev/null && echo "    experiment container stopped"
+EXP=$(docker ps -q --filter "name=experiment-$APP_UUID" || true)
+if [ -n "$EXP" ]; then docker stop "$EXP" >/dev/null; echo "    experiment container stopped"; fi
 BOT=$(docker ps -q --filter "name=bot-$APP_UUID")
 docker logs "$BOT" 2>&1 | tail -5
 curl -fsS -o /dev/null -w "    dashboard %{http_code}\n" https://stonkbot.filipkin.com/

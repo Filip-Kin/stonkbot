@@ -3,8 +3,10 @@
 // trading or freezes. It froze the $200 book below ~$167 of equity once; these
 // cases pin the fix.
 import { test, expect } from "bun:test";
-import { effectiveMinOrderUsd } from "./risk";
+import { effectiveMinOrderUsd, allowedBuyUsd, type RiskContext } from "./risk";
 import { config } from "./config";
+import type { Account, Position } from "./alpaca";
+import type { BotState } from "./state";
 
 const cap = (equity: number) => equity * config.risk.maxPositionFraction;
 
@@ -28,5 +30,43 @@ test("the $167 freeze is gone: a 12% position still clears the floor", () => {
 test("the floor never drops below Alpaca's fractional notional minimum", () => {
   expect(effectiveMinOrderUsd(1)).toBe(config.risk.absoluteMinOrderUsd);
   expect(effectiveMinOrderUsd(0)).toBe(config.risk.absoluteMinOrderUsd);
+});
+// #endregion
+
+// #region buy budget
+// A funded $200 book must produce a real budget. The first live cutover pinned it
+// to $0 because the rail capped on non_marginable_buying_power, which Alpaca
+// reports as 0 on a multiplier-1 account even with the full balance available.
+const acct = (over: Partial<Account> = {}): Account => ({
+  equity: 200, cash: 200, buying_power: 200, ...over,
+});
+const state = (over: Partial<BotState> = {}): BotState => ({
+  tradingDay: "2026-09-21", dayOpenEquity: 200, haltedForDay: false,
+  inceptionEquity: 200, benchmarkInceptionPrice: 34, buysToday: 0, sellsToday: 0,
+  realizedPlToday: 0, closeSummarySentDay: "", highWater: {}, ...over,
+} as BotState);
+const ctx = (over: Partial<RiskContext> = {}): RiskContext => ({
+  account: acct(), positions: [] as Position[], state: state(), ...over,
+});
+
+test("a funded $200 book budgets a full 12% position", () => {
+  expect(allowedBuyUsd(ctx())).toBeCloseTo(24, 2);
+});
+
+test("the cash buffer, not the broker's buying-power fields, is what throttles", () => {
+  // 7 positions open leaves $32 cash. The 10% buffer reserves $20, so $12 is
+  // spendable - under the $19.20 order floor, so the 8th position is refused.
+  // This is the state the live book sat in all last week.
+  expect(allowedBuyUsd(ctx({ account: acct({ cash: 32 }) }))).toBe(0);
+  // $45 clears it: $25 spendable, capped back down to the 12% position size.
+  expect(allowedBuyUsd(ctx({ account: acct({ cash: 45 }) }))).toBeCloseTo(24, 2);
+});
+
+test("a spent day-trade budget blocks the buy outright", () => {
+  expect(allowedBuyUsd(ctx({ entriesBlocked: true }))).toBe(0);
+});
+
+test("a halted day blocks the buy outright", () => {
+  expect(allowedBuyUsd(ctx({ state: state({ haltedForDay: true }) }))).toBe(0);
 });
 // #endregion

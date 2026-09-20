@@ -7,10 +7,6 @@ export interface Account {
   equity: number;
   cash: number;
   buying_power: number;
-  // Settled, non-marginable dollars. Sale proceeds only land here after T+1, so
-  // this is the number that says what can actually be spent right now without
-  // leaning on the broker's float. Falls back to cash when absent.
-  non_marginable_buying_power: number;
   daytrade_count?: number;
   pattern_day_trader?: boolean;
 }
@@ -117,7 +113,6 @@ async function dataWithRetry<T>(path: string, timeoutMs: number, retries: number
 // #region raw response coercion
 interface RawAccount {
   equity: string; cash: string; buying_power: string;
-  non_marginable_buying_power?: string;
   // Alpaca's paper accounts return null for both of these; the bot keeps its
   // own day-trade ledger (daytrades.ts) and only trusts these when present.
   daytrade_count?: number | null; pattern_day_trader?: boolean | null;
@@ -138,9 +133,6 @@ export async function getAccount(): Promise<Account> {
     equity: Number(a.equity),
     cash: Number(a.cash),
     buying_power: Number(a.buying_power),
-    non_marginable_buying_power: a.non_marginable_buying_power !== undefined
-      ? Number(a.non_marginable_buying_power)
-      : Number(a.cash),
     daytrade_count: a.daytrade_count ?? undefined,
     pattern_day_trader: a.pattern_day_trader ?? undefined,
   };

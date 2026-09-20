@@ -81,12 +81,13 @@ export function allowedBuyUsd(ctx: RiskContext): number {
   const equity = ctx.account.equity;
   const perPositionCap = equity * r.maxPositionFraction;
   const investableCash = ctx.account.cash - equity * r.cashBufferFraction;
-  // Settled dollars only. Alpaca fronts the float between trade and settlement,
-  // but spending money that is still unsettled is how a small book racks up
-  // good-faith violations, so the rail spends `non_marginable_buying_power`
-  // (which sale proceeds only enter after T+1) when it is the tighter number.
-  const settled = ctx.account.non_marginable_buying_power;
-  const budget = Math.min(perPositionCap, investableCash, settled);
+  // Cash, not `non_marginable_buying_power`. That field is buying power for
+  // NON-MARGINABLE securities, not settled cash, and on a multiplier-1 account it
+  // sits at 0 while ordinary buying power is the full balance - capping on it
+  // pinned every budget to $0 and the bot would never have opened a position.
+  // The no-leverage guarantee comes from the broker lock (max_margin_multiplier=1,
+  // so buying_power == cash) plus the simCash floor in index.ts, not from here.
+  const budget = Math.min(perPositionCap, investableCash);
 
   if (budget < effectiveMinOrderUsd(equity)) return 0;
   return Math.floor(budget * 100) / 100;
