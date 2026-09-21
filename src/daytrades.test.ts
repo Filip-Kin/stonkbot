@@ -85,3 +85,27 @@ test("the broker's own day-trade count wins when the account carries one", () =>
   expect(dt.dayTradesUsed(TODAY, acct({ daytrade_count: 0 }))).toBe(0);
 });
 // #endregion
+
+// #region budget freshness
+// The cycle used to read the budget once and reuse it. recordClose writes during
+// the exit loops, so a cached value goes stale mid-cycle and lets a fourth day
+// trade through - the exact thing the rail exists to prevent.
+test("the budget reflects a close recorded moments earlier", () => {
+  db().query("DELETE FROM day_trades").run();
+  db().query("DELETE FROM position_opens").run();
+  const a = acct();
+  expect(dt.dayTradeStatus(a, TODAY).remaining).toBe(3);
+
+  dt.recordOpen("AAPL", TODAY, "x");
+  dt.recordClose("AAPL", TODAY, "x");
+  expect(dt.dayTradeStatus(a, TODAY).remaining).toBe(2); // not 3
+
+  dt.recordOpen("MSFT", TODAY, "x");
+  dt.recordClose("MSFT", TODAY, "x");
+  dt.recordOpen("NVDA", TODAY, "x");
+  dt.recordClose("NVDA", TODAY, "x");
+  const after = dt.dayTradeStatus(a, TODAY);
+  expect(after.used).toBe(3);
+  expect(dt.mayOpen(after).allowed).toBe(false); // entries stop, count cannot rise
+});
+// #endregion

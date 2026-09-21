@@ -82,9 +82,14 @@ async function runCycle(now: Date): Promise<void> {
   // how many day trades are left in the rolling five-session window. Everything
   // below consults this instead of re-querying.
   syncOpens(positions, day, now.toISOString());
-  const dt: DayTradeStatus = dayTradeStatus(account, day);
-  if (dt.applies) {
-    console.log(`[pdt] day trades ${dt.used}/${dt.max} used in the last 5 sessions (${dt.remaining} left)`);
+  // Re-read, never cache. recordClose() writes a day trade during the exit loops
+  // below, so a value captured once here goes stale inside the same cycle: two
+  // stop-outs at 2/3 would both see "1 left" and the second would spend a fourth
+  // day trade. The read is a single indexed SQLite query.
+  const dtNow = (): DayTradeStatus => dayTradeStatus(account, day);
+  const dt0 = dtNow();
+  if (dt0.applies) {
+    console.log(`[pdt] day trades ${dt0.used}/${dt0.max} used in the last 5 sessions (${dt0.remaining} left)`);
   }
 
   // Capture inception equity + benchmark price once, for SCHD scoring.
@@ -116,10 +121,9 @@ async function runCycle(now: Date): Promise<void> {
     console.log(`[open] ${sinceOpen}m since open, indicators warm at ${config.strategy.openDelayMinutes}m — risk exits only`);
   }
 
-  const ctx: RiskContext = {
-    account, positions, state,
-    entriesBlocked: !mayOpen(dt).allowed || !indicatorsWarm,
-  };
+  // entriesBlocked is resolved per buy attempt, not here, for the same reason:
+  // exits later in this cycle can spend the last day trade.
+  const ctx: RiskContext = { account, positions, state };
 
   // 0) SHORT SAFETY SWEEP. A short position has unbounded downside and is the
   // only way to lose more than you invested. We never open one, but if the
@@ -145,19 +149,25 @@ async function runCycle(now: Date): Promise<void> {
     state.highWater[p.symbol] = Math.max(prevPeak, p.current_price);
   }
 
+  // Symbols closed earlier in THIS cycle. `positions` is the pre-exit snapshot, so
+  // without this a take-profit and an RSI exit firing on the same green position
+  // would both try to close it and the second call would throw the cycle away.
+  const closedThisCycle = new Set<string>();
+
   // 1) Forced risk exits first (hard stop-loss, take-profit, trailing stop).
   for (const exit of forcedExits(positions, state.highWater)) {
     // A hard exit on a position opened THIS session is a day trade. If the
     // budget is gone, hold overnight rather than trip PDT: at this book size a
     // gap is worth cents, a 90-day restriction is worth the whole experiment.
     // The exit is not cancelled — next session it is free and fires first.
-    const gate = mayExit(exit.symbol, day, "stop", dt);
+    const gate = mayExit(exit.symbol, day, "stop", dtNow());
     if (!gate.allowed) {
       console.log(`[pdt] holding ${exit.symbol} (${exit.reason}): ${gate.reason}`);
       continue;
     }
     console.log(`[exit] ${exit.symbol}: ${exit.reason}`);
     await closePosition(exit.symbol);
+    closedThisCycle.add(exit.symbol);
     const pos = positions.find((p) => p.symbol === exit.symbol);
     if (pos) await recordSell(pos, exit.reason, now, state, day);
   }
@@ -232,11 +242,12 @@ async function runCycle(now: Date): Promise<void> {
   // Strategy-driven sells (momentum exits).
   for (const sig of signals) {
     if (sig.action === "sell" && alreadyHolding(positions, sig.symbol)) {
+      if (closedThisCycle.has(sig.symbol)) continue; // already flat, exited above
       if (!indicatorsWarm) {
         console.log(`[open] holding ${sig.symbol}: momentum exit suppressed until indicators warm`);
         continue;
       }
-      const gate = mayExit(sig.symbol, day, "discretionary", dt);
+      const gate = mayExit(sig.symbol, day, "discretionary", dtNow());
       if (!gate.allowed) {
         console.log(`[pdt] deferring ${sig.symbol} momentum exit: ${gate.reason}`);
         continue;
@@ -260,13 +271,19 @@ async function runCycle(now: Date): Promise<void> {
     // so every gate that rides on the context - the PDT entry block and the
     // indicator warm-up - was silently discarded and buys went through anyway.
     // Spreading means a flag added to ctx in future is carried here for free.
-    const simCtx: RiskContext = { ...ctx, account: { ...account, cash: simCash }, positions: simPositions };
+    const simCtx: RiskContext = {
+      ...ctx,
+      account: { ...account, cash: simCash },
+      positions: simPositions,
+      entriesBlocked: !mayOpen(dtNow()).allowed || !indicatorsWarm,
+    };
     const budget = allowedBuyUsd(simCtx);
     if (budget <= 0) break;
 
     const pick = signals
       .filter((s) => s.action === "buy"
         && !alreadyHolding(simPositions, s.symbol)
+        && !closedThisCycle.has(s.symbol) // never re-open what just exited
         && !sectorAtCap(simPositions, s.symbol)) // skip if this sector is already full
       .sort((a, b) => b.score - a.score)[0];
     if (!pick) break;
