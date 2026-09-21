@@ -256,7 +256,11 @@ async function runCycle(now: Date): Promise<void> {
   const simPositions = [...positions];
   let simCash = account.cash;
   for (let filled = 0; filled < config.risk.maxBuysPerCycle; filled++) {
-    const simCtx: RiskContext = { account: { ...account, cash: simCash }, positions: simPositions, state };
+    // Spread ctx, never rebuild it. Built from scratch this dropped entriesBlocked,
+    // so every gate that rides on the context - the PDT entry block and the
+    // indicator warm-up - was silently discarded and buys went through anyway.
+    // Spreading means a flag added to ctx in future is carried here for free.
+    const simCtx: RiskContext = { ...ctx, account: { ...account, cash: simCash }, positions: simPositions };
     const budget = allowedBuyUsd(simCtx);
     if (budget <= 0) break;
 

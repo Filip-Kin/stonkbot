@@ -70,3 +70,25 @@ test("a halted day blocks the buy outright", () => {
   expect(allowedBuyUsd(ctx({ state: state({ haltedForDay: true }) }))).toBe(0);
 });
 // #endregion
+
+// #region context inheritance
+// The buy loop re-derives a context per fill (simulated cash, simulated book).
+// It once rebuilt that object literally, which dropped entriesBlocked and made
+// both the PDT entry block and the open-delay gate no-ops on real money. Any
+// derived context must inherit the gates.
+test("a derived buy context keeps the gates from its parent", () => {
+  const parent = ctx({ entriesBlocked: true });
+  const derived: RiskContext = { ...parent, account: acct({ cash: 176 }), positions: [] };
+  expect(derived.entriesBlocked).toBe(true);
+  expect(allowedBuyUsd(derived)).toBe(0);
+});
+
+test("rebuilding a derived context from parts loses them - the shape of the bug", () => {
+  const parent = ctx({ entriesBlocked: true });
+  const rebuilt: RiskContext = {
+    account: parent.account, positions: parent.positions, state: parent.state,
+  };
+  expect(rebuilt.entriesBlocked).toBeUndefined();
+  expect(allowedBuyUsd(rebuilt)).toBeCloseTo(24, 2); // would have bought
+});
+// #endregion
