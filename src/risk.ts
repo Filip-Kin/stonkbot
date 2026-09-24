@@ -8,9 +8,8 @@ export interface RiskContext {
   account: Account;
   positions: Position[];
   state: BotState;
-  // Set when the pattern-day-trader rail has spent its budget: no new entries,
-  // because an entry is the only thing that can create another day trade.
-  // See daytrades.ts.
+  // Set when entries are suppressed for the cycle - currently the indicator
+  // warm-up after the open (index.ts). Exits are never gated by this.
   entriesBlocked?: boolean;
 }
 

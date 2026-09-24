@@ -6,8 +6,6 @@
 // gates + a five-level news read and recent headlines), and the closed-trade
 // log with the reason each position was sold.
 import { config } from "./config";
-import { dayTradeStatus, type DayTradeStatus } from "./daytrades";
-import { usTradingDay } from "./market-clock";
 import { loadState, loadSignals } from "./state";
 import { loadEquityHistory, loadBenchmarkHistory, loadTrades } from "./db";
 import { getAccount, getPositions, getLatestPrice, getClock, type Position } from "./alpaca";
@@ -76,14 +74,10 @@ async function render(): Promise<string> {
     ? ((benchNow - state.benchmarkInceptionPrice) / state.benchmarkInceptionPrice) * 100 : null;
   const edge = botReturn !== null && benchReturn !== null ? botReturn - benchReturn : null;
 
-  // Day-trade budget. Read-only here: syncOpens belongs to the bot process, which
-  // owns the ledger. Null when the account call failed, so the tile just hides.
-  const dayTrades = acct ? dayTradeStatus(acct, usTradingDay(new Date())) : null;
-
   const marketStatus = renderMarketStatus(clock);
   const scoreboard = renderScoreboard(botReturn, benchReturn, edge);
   const chart = renderChart();
-  const tiles = renderTiles({ equity, cash, positions, dayTrades });
+  const tiles = renderTiles({ equity, cash, positions });
   const holdings = renderHoldings(positions);
   const watchlist = await renderWatchlist(posMap);
   const trades = renderTrades();
@@ -374,7 +368,7 @@ function rebase(pts: { t: string; v: number }[]): { t: number; r: number }[] {
 
 // #region KPI tiles
 function renderTiles(
-  o: { equity: number; cash: number; positions: Position[]; dayTrades: DayTradeStatus | null },
+  o: { equity: number; cash: number; positions: Position[] },
 ): string {
   const trades = loadTrades();
   const realized = trades.reduce((a, t) => a + t.realizedPl, 0);
@@ -389,21 +383,7 @@ function renderTiles(
   const tile = (k: string, v: string, s: string, cls = "") =>
     `<div class="card tile"><div class="k">${k}</div><div class="v ${cls}">${v}</div><div class="s">${s}</div></div>`;
 
-  // The day-trade budget only exists below the $25k PDT line, so the tile only
-  // exists there too. It is the binding constraint on a small book: when it hits
-  // zero the bot stops opening positions entirely.
-  const dt = o.dayTrades;
-  const dtTile = dt?.applies
-    ? tile(
-        "⚖️ Day trades",
-        `${dt.used}<span class="s" style="font-weight:400"> / ${dt.max}</span>`,
-        dt.remaining === 0 ? "<span class='down'>budget spent · no new entries</span>" : "5-session window",
-        dt.remaining === 0 ? "down" : "",
-      )
-    : "";
-
   return [
-    dtTile,
     tile("💰 Realized P/L", `<span class="${pctCls(realized)}">${signed(realized)}$</span>`.replace("$", ""), `${trades.length} trades closed`),
     tile("🎯 Win rate", `${winRate.toFixed(0)}%`, `${wins}W / ${losses}L`, winRate >= 50 ? "up" : "down"),
     tile("📊 Open positions", `${o.positions.length}<span class="s" style="font-weight:400"> / ${config.risk.maxOpenPositions}</span>`, `unreal <span class="${pctCls(openUnreal)}">${signed(openUnreal)}</span>`),

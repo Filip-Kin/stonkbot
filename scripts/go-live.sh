@@ -68,8 +68,7 @@ mkdir -p "$HOME/backups"
 sudo sqlite3 "$DATA/stonkbot.db" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null
 sudo cp "$DATA/stonkbot.db" "$BACKUP"
 sudo sqlite3 "$DATA/stonkbot.db" \
-  "DELETE FROM equity_history; DELETE FROM trades; DELETE FROM daily_summary; \
-   DELETE FROM position_opens; DELETE FROM day_trades;"
+  "DELETE FROM equity_history; DELETE FROM trades; DELETE FROM daily_summary;"
 sudo tee "$DATA/state.json" >/dev/null <<'JSON'
 {"tradingDay":"","dayOpenEquity":0,"haltedForDay":false,"inceptionEquity":0,
  "benchmarkInceptionPrice":0,"buysToday":0,"sellsToday":0,"realizedPlToday":0,

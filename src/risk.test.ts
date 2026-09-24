@@ -62,7 +62,7 @@ test("the cash buffer, not the broker's buying-power fields, is what throttles",
   expect(allowedBuyUsd(ctx({ account: acct({ cash: 45 }) }))).toBeCloseTo(24, 2);
 });
 
-test("a spent day-trade budget blocks the buy outright", () => {
+test("a blocked context refuses the buy outright", () => {
   expect(allowedBuyUsd(ctx({ entriesBlocked: true }))).toBe(0);
 });
 
@@ -74,7 +74,7 @@ test("a halted day blocks the buy outright", () => {
 // #region context inheritance
 // The buy loop re-derives a context per fill (simulated cash, simulated book).
 // It once rebuilt that object literally, which dropped entriesBlocked and made
-// both the PDT entry block and the open-delay gate no-ops on real money. Any
+// the open-delay gate a no-op on real money. Any
 // derived context must inherit the gates.
 test("a derived buy context keeps the gates from its parent", () => {
   const parent = ctx({ entriesBlocked: true });

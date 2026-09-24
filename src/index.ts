@@ -22,10 +22,6 @@ import {
 } from "./db";
 import { getBars } from "./alpaca";
 import { notify, setNotifyEnabled } from "./notify";
-import {
-  syncOpens, dayTradeStatus, mayExit, mayOpen, recordOpen, recordClose,
-  type DayTradeStatus,
-} from "./daytrades";
 import { usTradingDay, minutesSinceOpen } from "./market-clock";
 
 // Stable signature of a headline set, so the AI sentiment only re-runs when the
@@ -41,15 +37,10 @@ function sigOf(headlines: string[]): string {
 // pre-close snapshot, so its unrealized P/L is the realized result of the
 // market close.
 async function recordSell(
-  pos: Position, reason: string, now: Date, state: BotState, tradingDay: string,
+  pos: Position, reason: string, now: Date, state: BotState,
 ): Promise<void> {
   const pl = pos.unrealized_pl;
   const plPct = pos.unrealized_plpc;
-  // Close the day-trade ledger row. If this was a same-session round trip it is
-  // counted against the rolling five-session budget.
-  if (recordClose(pos.symbol, tradingDay, now.toISOString())) {
-    console.log(`[pdt] ${pos.symbol} closed same session — day trade recorded`);
-  }
   // Tally into the day's counters for the market-close summary push.
   state.sellsToday += 1;
   state.realizedPlToday += pl;
@@ -77,20 +68,6 @@ async function runCycle(now: Date): Promise<void> {
   const day = usTradingDay(now);
   let state = await loadState();
   state = rollDayIfNeeded(state, day, account.equity);
-
-  // Reconcile the day-trade ledger against the broker's real book, then work out
-  // how many day trades are left in the rolling five-session window. Everything
-  // below consults this instead of re-querying.
-  syncOpens(positions, day, now.toISOString());
-  // Re-read, never cache. recordClose() writes a day trade during the exit loops
-  // below, so a value captured once here goes stale inside the same cycle: two
-  // stop-outs at 2/3 would both see "1 left" and the second would spend a fourth
-  // day trade. The read is a single indexed SQLite query.
-  const dtNow = (): DayTradeStatus => dayTradeStatus(account, day);
-  const dt0 = dtNow();
-  if (dt0.applies) {
-    console.log(`[pdt] day trades ${dt0.used}/${dt0.max} used in the last 5 sessions (${dt0.remaining} left)`);
-  }
 
   // Capture inception equity + benchmark price once, for SCHD scoring.
   if (state.inceptionEquity <= 0) {
@@ -121,9 +98,7 @@ async function runCycle(now: Date): Promise<void> {
     console.log(`[open] ${sinceOpen}m since open, indicators warm at ${config.strategy.openDelayMinutes}m — risk exits only`);
   }
 
-  // entriesBlocked is resolved per buy attempt, not here, for the same reason:
-  // exits later in this cycle can spend the last day trade.
-  const ctx: RiskContext = { account, positions, state };
+  const ctx: RiskContext = { account, positions, state, entriesBlocked: !indicatorsWarm };
 
   // 0) SHORT SAFETY SWEEP. A short position has unbounded downside and is the
   // only way to lose more than you invested. We never open one, but if the
@@ -156,20 +131,11 @@ async function runCycle(now: Date): Promise<void> {
 
   // 1) Forced risk exits first (hard stop-loss, take-profit, trailing stop).
   for (const exit of forcedExits(positions, state.highWater)) {
-    // A hard exit on a position opened THIS session is a day trade. If the
-    // budget is gone, hold overnight rather than trip PDT: at this book size a
-    // gap is worth cents, a 90-day restriction is worth the whole experiment.
-    // The exit is not cancelled — next session it is free and fires first.
-    const gate = mayExit(exit.symbol, day, "stop", dtNow());
-    if (!gate.allowed) {
-      console.log(`[pdt] holding ${exit.symbol} (${exit.reason}): ${gate.reason}`);
-      continue;
-    }
     console.log(`[exit] ${exit.symbol}: ${exit.reason}`);
     await closePosition(exit.symbol);
     closedThisCycle.add(exit.symbol);
     const pos = positions.find((p) => p.symbol === exit.symbol);
-    if (pos) await recordSell(pos, exit.reason, now, state, day);
+    if (pos) await recordSell(pos, exit.reason, now, state);
   }
 
   // 2) Daily loss cap check.
@@ -247,15 +213,10 @@ async function runCycle(now: Date): Promise<void> {
         console.log(`[open] holding ${sig.symbol}: momentum exit suppressed until indicators warm`);
         continue;
       }
-      const gate = mayExit(sig.symbol, day, "discretionary", dtNow());
-      if (!gate.allowed) {
-        console.log(`[pdt] deferring ${sig.symbol} momentum exit: ${gate.reason}`);
-        continue;
-      }
       console.log(`[sell] ${sig.symbol}: ${sig.reason}`);
       await closePosition(sig.symbol);
       const pos = positions.find((p) => p.symbol === sig.symbol);
-      if (pos) await recordSell(pos, sig.reason, now, state, day);
+      if (pos) await recordSell(pos, sig.reason, now, state);
     }
   }
 
@@ -267,16 +228,10 @@ async function runCycle(now: Date): Promise<void> {
   const simPositions = [...positions];
   let simCash = account.cash;
   for (let filled = 0; filled < config.risk.maxBuysPerCycle; filled++) {
-    // Spread ctx, never rebuild it. Built from scratch this dropped entriesBlocked,
-    // so every gate that rides on the context - the PDT entry block and the
-    // indicator warm-up - was silently discarded and buys went through anyway.
-    // Spreading means a flag added to ctx in future is carried here for free.
-    const simCtx: RiskContext = {
-      ...ctx,
-      account: { ...account, cash: simCash },
-      positions: simPositions,
-      entriesBlocked: !mayOpen(dtNow()).allowed || !indicatorsWarm,
-    };
+    // Spread ctx, never rebuild it. Built from scratch this once dropped
+    // entriesBlocked, so the indicator warm-up was silently discarded and buys
+    // went through anyway. Spreading carries any future flag for free.
+    const simCtx: RiskContext = { ...ctx, account: { ...account, cash: simCash }, positions: simPositions };
     const budget = allowedBuyUsd(simCtx);
     if (budget <= 0) break;
 
@@ -296,7 +251,6 @@ async function runCycle(now: Date): Promise<void> {
 
     console.log(`[buy] ${pick.symbol} $${spend.toFixed(2)}: ${pick.reason}`);
     await submitBuy({ symbol: pick.symbol, notional: spend, type: "market" });
-    recordOpen(pick.symbol, day, now.toISOString());
     state.buysToday += 1;
     // Per-trade BUY push intentionally omitted: Filip only wants the daily
     // close summary. Fill is still counted (buysToday) + shown on the dashboard.

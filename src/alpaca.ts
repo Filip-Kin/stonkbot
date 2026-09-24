@@ -7,8 +7,6 @@ export interface Account {
   equity: number;
   cash: number;
   buying_power: number;
-  daytrade_count?: number;
-  pattern_day_trader?: boolean;
 }
 
 export interface Position {
@@ -89,9 +87,6 @@ async function data<T>(path: string, timeoutMs: number = ALPACA_TIMEOUT_MS): Pro
 // #region raw response coercion
 interface RawAccount {
   equity: string; cash: string; buying_power: string;
-  // Alpaca's paper accounts return null for both of these; the bot keeps its
-  // own day-trade ledger (daytrades.ts) and only trusts these when present.
-  daytrade_count?: number | null; pattern_day_trader?: boolean | null;
 }
 interface RawPosition {
   symbol: string; qty: string; avg_entry_price: string; current_price: string;
@@ -109,8 +104,6 @@ export async function getAccount(): Promise<Account> {
     equity: Number(a.equity),
     cash: Number(a.cash),
     buying_power: Number(a.buying_power),
-    daytrade_count: a.daytrade_count ?? undefined,
-    pattern_day_trader: a.pattern_day_trader ?? undefined,
   };
 }
 
