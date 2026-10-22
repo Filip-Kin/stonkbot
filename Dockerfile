@@ -1,5 +1,5 @@
 # Bun runtime image. One image, two commands (bot + dashboard) selected by compose.
-FROM oven/bun:1.3.13-slim
+FROM oven/bun:1.4.4-slim
 
 WORKDIR /app
 
