@@ -1,0 +1,17 @@
+[Unit]
+Description=stonkbot news classifier shim (claude --print under Filip's subscription)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=filip
+WorkingDirectory=/home/filip/stonkbot-classifier
+ExecStart=/usr/local/bin/bun run server.ts
+Restart=on-failure
+RestartSec=5
+# HOME so the claude CLI finds ~/.claude subscription credentials.
+Environment=HOME=/home/filip
+
+[Install]
+WantedBy=multi-user.target
